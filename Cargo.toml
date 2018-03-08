@@ -1,0 +1,12 @@
+[package]
+name = "tftp"
+version = "0.1.0"
+authors = ["jkarn"]
+
+[dependencies]
+memmap = "0.6.2"
+futures = "0.1.17"
+tokio-core = "*"
+local-ip = "0.1"
+lazy_static = "1.0"
+bit-set = "0.4.0"
