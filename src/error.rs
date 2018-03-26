@@ -48,6 +48,9 @@ pub enum TFTPError {
     /// The UDP connection suddenly closed
     ConnectionClosed,
 
+    /// Received data from the wrong source address
+    WrongHost,
+
     /// A string in a header contained invalid unicode.
     InvalidUnicodeString(FromUtf8Error)
 }

@@ -4,12 +4,97 @@ use types::*;
 use std::mem;
 use std::marker::PhantomData;
 use std::ascii::AsciiExt;
+use std::net::{ SocketAddr, ToSocketAddrs };
+use std::net::UdpSocket;
+use std::io;
+
+/// Since packets are small, just allocate the same amount of memory for each buffer. Increase this
+/// if data is being truncated.
+const BUFF_ALLOCATION_SIZE: usize = 1024;
 
 const OPCODE_RRQ: u8 = 1;
 const OPCODE_WRQ: u8 = 2;
 const OPCODE_DATA: u8 = 3;
 const OPCODE_ACK: u8 = 4;
 const OPCODE_ERROR: u8 = 5;
+
+pub enum Header {
+    Ack(AckHeader),
+    Read(RWHeader<ReadHeader>),
+    Write(RWHeader<WriteHeader>),
+    Data(DataHeader),
+    Error(ErrorHeader),
+    Invalid(Box<[u8]>)
+}
+
+impl Header {
+    pub fn recv(from: SocketAddr, socket: &mut UdpSocket) -> Result<Self, TFTPError> {
+        let mut buf = vec![0u8; BUFF_ALLOCATION_SIZE];
+        match socket.peek_from(buf.as_mut()) {
+            Ok((bytes_read, src_addr)) => {
+                if from != src_addr {
+                    Err(TFTPError::WrongHost)
+                } else {
+                    let _ = socket.recv_from(buf.as_mut());
+                    Ok(match buf[1] {
+                        OPCODE_RRQ => Header::Read(RWHeader::<ReadHeader>::from_raw(&buf)?),
+                        OPCODE_WRQ => Header::Write(RWHeader::<WriteHeader>::from_raw(&buf)?),
+                        OPCODE_ACK => Header::Ack(AckHeader::from_raw(&buf)?),
+                        OPCODE_ERROR => Header::Error(ErrorHeader::from_raw(&buf)?),
+                        OPCODE_DATA => Header::Data(DataHeader::from_raw(&buf)?),
+                        _ => Header::Invalid(buf.into_boxed_slice())
+                    })
+                }
+            },
+            Err(e) => Err(TFTPError::IOError(e))
+        }
+    }
+
+    pub fn peek(socket: &mut UdpSocket) -> Result<(Self, SocketAddr), TFTPError> {
+        let mut buf = vec![0u8; BUFF_ALLOCATION_SIZE];
+        match socket.peek_from(buf.as_mut()) {
+            Ok((bytes_read, src_addr)) => {
+                Ok((
+                    match buf[1] {
+                        OPCODE_RRQ => Header::Read(RWHeader::<ReadHeader>::from_raw(&buf)?),
+                        OPCODE_WRQ => Header::Write(RWHeader::<WriteHeader>::from_raw(&buf)?),
+                        OPCODE_ACK => Header::Ack(AckHeader::from_raw(&buf)?),
+                        OPCODE_ERROR => Header::Error(ErrorHeader::from_raw(&buf)?),
+                        OPCODE_DATA => Header::Data(DataHeader::from_raw(&buf)?),
+                        _ => Header::Invalid(buf.into_boxed_slice())
+                    },
+                    src_addr))
+            },
+            Err(e) => Err(TFTPError::IOError(e))
+        }
+    }
+
+    /// Sends a header
+    pub fn send(self, to: SocketAddr, socket: &mut UdpSocket) -> Result<(), io::Error> {
+        let raw = self.into_raw_request();
+        match socket.send_to(raw.as_ref(), to) {
+            Ok(bytes_written) => {
+                if bytes_written < raw.len() {
+                    Err(io::Error::new(io::ErrorKind::Other, "Failed to send all data in one UDP packet."))
+                } else {
+                    Ok(())
+                }
+            },
+            Err(e) => Err(e)
+        }
+    }
+
+    fn into_raw_request(self) -> RawRequest {
+        match self {
+            Header::Ack(header)     => header.into(),
+            Header::Read(header)    => header.into(),
+            Header::Write(header)   => header.into(),
+            Header::Error(header)   => header.into(),
+            Header::Data(header)    => header.into(),
+            Header::Invalid(header) => panic!("Attempted to serialize an invalid header...")
+        }
+    }
+}
 
 /// RFC1350 specifies 3 RW modes. As of right now, Mail functionality will be left out.
 #[derive(Clone, Copy, Debug)]
@@ -67,13 +152,13 @@ pub trait ToRequestType {
     fn request_type() -> RequestType;
 }
 
-pub struct ReadRequest;
-impl ToRequestType for ReadRequest {
+pub struct ReadHeader;
+impl ToRequestType for ReadHeader {
     fn request_type() -> RequestType { RequestType::Read }
 }
 
-pub struct WriteRequest;
-impl ToRequestType for WriteRequest {
+pub struct WriteHeader;
+impl ToRequestType for WriteHeader {
     fn request_type() -> RequestType { RequestType::Write }
 }
 
@@ -185,15 +270,14 @@ impl<T: ToRequestType> Into<RawRequest> for RWHeader<T> {
 
         let mut i = 2;
 
-        data[2..].clone_from_slice(filename);
+        data[2..filename.len() + 2].clone_from_slice(filename);
         i += filename.len();
         data[i] = 0;
         i += 1;
-
         // Not allowed to have empty string for as a filename
-        debug_assert!(data[2] == 0);
+        debug_assert!(data[2] != 0);
 
-        data[i..].clone_from_slice(mode_slice);
+        data[i..i + mode_slice.len()].clone_from_slice(mode_slice);
         i += mode_slice.len();
         data[i] = 0;
         i += 1;
@@ -223,14 +307,14 @@ pub struct DataHeader {
     /// How many bytes of [data] are actually being used.
     pub data_len: usize,
     /// The block number. Each block is MAX_DATA_LEN bytes in size.
-    pub block_number: u32
+    pub block_number: usize
 }
 
 impl DataHeader {
 
     /// Tries to create a new data header to be sent out.
     /// Returns Some(..) unless block_number * MAX_DATA_LEN goes over the length of data_src.
-    pub fn new(mut data_src: &[u8], block_number: u32) -> Option<Self> {
+    pub fn new(mut data_src: &[u8], block_number: usize) -> Option<Self> {
         let index = block_number as usize * MAX_DATA_LEN;
         if data_src.len() <= index {
             None
@@ -247,14 +331,20 @@ impl DataHeader {
         }
     }
 
+    pub fn new_empty(block_number: usize) -> Self {
+        DataHeader {
+            data: [0u8; MAX_DATA_LEN],
+            block_number,
+            data_len: 0
+        }
+    }
+
     pub fn into_raw(self) -> RawRequest { self.into() }
 
     pub fn from_raw(src: RawResponse) -> TFTPResult<Self> {
         debug_assert!(src[1] == OPCODE_DATA);
         if src.len() < 4 {
             return Err(TFTPError::InvalidHeaderLen)
-        } else if src.len() < 5 {
-            return Err(TFTPError::InvalidDataLen)
         }
         // The MSB of the op# will be used to extend the data # range to 24 bits rather than
         // just the 16 bits as specified by the RFC. The extra byte will be the MSB, so it will not
@@ -263,6 +353,7 @@ impl DataHeader {
         block_number |= (src[0] as u32) << 16;
         block_number |= (src[2] as u32) << 8;
         block_number |= (src[3] as u32);
+        let block_number = block_number as usize;
 
         let mut data = [0u8; MAX_DATA_LEN];
         let index = cmp::min(DATA_HEADER_LEN + MAX_DATA_LEN, src.len());
@@ -280,7 +371,7 @@ impl Into<RawRequest> for DataHeader {
     fn into(self) -> RawRequest {
         let block_number = [(self.block_number >> 16) as u8, (self.block_number >> 8) as u8, (self.block_number) as u8];
         let mut data = vec![0u8; 4 + self.data_len];
-        data[1] = OPCODE_ERROR;
+        data[1] = OPCODE_DATA;
 
         data[0] = block_number[0];
         data[2] = block_number[1];
@@ -289,7 +380,7 @@ impl Into<RawRequest> for DataHeader {
         let mut i = 0;
 
 
-        data[4..].clone_from_slice(&self.data);
+        data[4..self.data.len() + 4].clone_from_slice(&self.data);
 
         data
     }
@@ -304,10 +395,10 @@ impl Into<RawRequest> for DataHeader {
 ///        -------------------------------------------------
 /// ```
 #[derive(Clone, Debug)]
-pub struct AckHeader { pub block_number: u32 }
+pub struct AckHeader { pub block_number: usize }
 
 impl AckHeader {
-    pub fn new(block_number: u32) -> Self { AckHeader { block_number } }
+    pub fn new(block_number: usize) -> Self { AckHeader { block_number } }
     pub fn into_raw(self) -> RawRequest { self.into() }
     pub fn from_raw(src: RawResponse) -> TFTPResult<AckHeader> {
         debug_assert!(src[1] == OPCODE_ACK);
@@ -321,6 +412,7 @@ impl AckHeader {
         block_number |= (src[0] as u32) << 16;
         block_number |= (src[2] as u32) << 8;
         block_number |= (src[3] as u32);
+        let block_number = block_number as usize;
 
         Ok(AckHeader { block_number })
     }
@@ -378,10 +470,10 @@ impl From<u16> for ErrorCode {
 pub struct ErrorHeader {
 
     /// Gives a hint as to what may have went wrong.
-    error_code: ErrorCode,
+    pub error_code: ErrorCode,
 
     /// The error message of this error header. Should not contain any null (0) bytes.
-    error_message: String,
+    pub error_message: String,
 }
 
 impl ErrorHeader {
@@ -435,7 +527,7 @@ impl Into<RawRequest> for ErrorHeader {
 
         let error_message_bytes: &[u8] = self.error_message.as_ref();
 
-        data[4..data_len - 1].clone_from_slice(error_message_bytes);
+        data[4..4 + error_message_bytes.len()].clone_from_slice(error_message_bytes);
         data[data_len - 1] = 0;
         data
     }

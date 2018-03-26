@@ -1,20 +1,23 @@
-use std::net::{ SocketAddr, ToSocketAddrs };
-use bit_set::BitSet;
-use std::fs::File;
-use std::io::{ self, Read, Write, Seek };
-use std::path::Path;
+use std::net::SocketAddr;
+use std::fs::*;
+use std::io;
 use futures::{ Future, Poll, Async };
 use std::net::UdpSocket;
 use std::time::Duration;
 use std::sync::{ Arc, Mutex };
-use memmap::{ Mmap, MmapOptions };
-use std::time::Instant;
+use error::TFTPError;
+use std::ops::*;
+use std::str::FromStr;
+use std::path::Path;
+use futures::prelude::*;
+use futures::future;
 
-use net_util::LOCAL_IP;
 use types::*;
 use header::*;
+use send::*;
+use receive::ReceiveFile;
 
-const MAX_ATTEMPTS: u32 = 4;
+pub const MAX_ATTEMPTS: usize = 8;
 
 /// Represents what action a TFTPClient is currently performing. By default, a TFTPClient will have
 /// the Action::NoAction.
@@ -27,238 +30,197 @@ pub enum Action {
     EstablishConnection
 }
 
+#[derive(Clone)]
 pub struct TFTPClient {
-    host_address: SocketAddr,
+    host_addr: SocketAddr,
     action: Action,
-    local_port: u16,
     udp_socket: Arc<Mutex<UdpSocket>>
 }
 
-impl TFTPClient {
-    pub fn new<T: ToSocketAddrs>(host_address: T, local_port: u16) -> Result<Self, Option<io::Error>> {
-        let local_socket_addr: SocketAddr = SocketAddr::from((LOCAL_IP.clone(), local_port));
-        let udp_socket: UdpSocket;
-        let res = UdpSocket::bind(local_socket_addr);
-        match res {
-            Ok(socket) => udp_socket = socket,
-            Err(e) => return Err(Some(e))
-        };
+unsafe impl Send for TFTPClient {}
+unsafe impl Sync for TFTPClient {}
 
-        let addr = host_address.to_socket_addrs();
-        if let Err(e) = addr {
-            return Err(Some(e))
-        }
-        let address_opt = addr.unwrap().next();
-        if let Some(host_address) = address_opt {
-            Ok(TFTPClient {
-                action: Action::NoAction,
-                host_address,
-                local_port,
-                udp_socket: Arc::new(Mutex::new(udp_socket))
-            })
+impl TFTPClient {
+    pub fn new(host_addr: SocketAddr, socket_addr: SocketAddr) -> Result<Self, io::Error> {
+        let mut udp_socket: UdpSocket = UdpSocket::bind(socket_addr)?;
+        udp_socket.set_read_timeout(Some(Duration::from_secs(4)))?;
+        udp_socket.set_write_timeout(Some(Duration::from_secs(4)))?;
+
+        Ok(TFTPClient {
+            action: Action::NoAction,
+            host_addr,
+            udp_socket: Arc::new(Mutex::new(udp_socket))
+        })
+    }
+
+    //fn connect_to_host(host_addr: SocketAddr) -> impl Future<Item=(), Error=io::Error> { unimplemented!() }
+    //pub fn send_file<P: AsRef<Path>, S: AsRef<Path>>(source: P, filename: S) -> impl Future<Item=i32, Error=io::Error> { unimplemented!() }
+
+    pub fn request_file<P: AsRef<Path>, S: AsRef<Path>>(&mut self, filename: P, destination: S) -> impl Future<Item=(), Error=io::Error> {
+        let dest_path: &Path = destination.as_ref();
+        let dest = "data/".to_string().add(dest_path.to_str().unwrap());
+        let filename = filename.as_ref().to_str().unwrap().to_string();
+
+        let addr = self.host_addr.clone();
+        let mut socket = self.udp_socket.clone();
+        let read_header = Header::Read(RWHeader::<ReadHeader>::new(filename, RWMode::Octet).unwrap());
+        let send_read = future::ok::<u32, u32>(1).then(move |_| {
+            let r = if let Ok(ref mut sock) = socket.try_lock() {
+                match read_header.send(addr, sock) {
+                    Ok(_) => Ok(Async::Ready(())),
+                    Err(e) => Err(e)
+                }
+            } else {
+                Err(io::Error::new(io::ErrorKind::Other, "Failed to obtain UDP Socket lock."))
+            };
+            r
+        });
+
+        let addr = self.host_addr.clone();
+        let socket = self.udp_socket.clone();
+        send_read.and_then(move |_| {
+
+            println!("{}", dest);
+            let mut run =
+                ReceiveFile::new(socket, addr,
+                                 OpenOptions::new()
+                                     .read(true)
+                                     .write(true)
+                                     .create(true)
+                                     .open(dest)?)?;
+                run.run()
+        })
+    }
+
+    pub fn send_error(&mut self, error: ErrorCode) -> impl Future<Item=(), Error=io::Error> {
+        SendError::new(ErrorHeader::new(error, "<No description supplied>".to_string()).unwrap(), self.host_addr.clone(), self.udp_socket.clone())
+    }
+
+    fn receive_header(&mut self) -> Result<Option<Header>, io::Error> {
+        if let Ok(ref mut socket) = self.udp_socket.try_lock() {
+            match Header::recv(self.host_addr.clone(), socket) {
+                Ok(r)   => Ok(Some(r)),
+                Err(e)  => {
+                    if let TFTPError::IOError(ioerr) = e {
+                        Err(ioerr)
+                    } else {
+                        Ok(None)
+                    }
+                }
+            }
         } else {
-            Err(None)
+            Ok(None)
         }
     }
 
-    //fn connect_to_host(host_address: SocketAddr) -> impl Future<Item=(), Error=io::Error> { unimplemented!() }
-    //pub fn send_file<P: AsRef<Path>, S: AsRef<Path>>(source: P, filename: S) -> impl Future<Item=i32, Error=io::Error> { unimplemented!() }
-    //pub fn request_file<P: AsRef<Path>, S: AsRef<Path>>(filename: P, destination: S) -> impl Future<Item=i32, Error=io::Error> { unimplemented!() }
-    pub fn send_error(&mut self, error: ErrorCode) -> impl Future<Item=(), Error=io::Error> {
-        SendError::new(ErrorHeader::new(error, "1".to_string()).unwrap(), self.host_address.clone(), self.udp_socket.clone())
+    fn handle_write_request(&mut self, write_header: RWHeader<WriteHeader>) {
+        let mut file = File::create("./data/".to_string().add(&write_header.filename)).unwrap();
+        let mut recv_file = ReceiveFile::new(self.udp_socket.clone(), self.host_addr.clone(), file).unwrap();
+        recv_file.run().unwrap();
+    }
+
+    fn handle_read_request(&mut self, read_header: RWHeader<ReadHeader>) {
+        let mut file = match File::open("./data/".to_string().add(&read_header.filename)) {
+            Ok(a) => a,
+            Err(e) => {
+                let mut send_err = self.send_error(ErrorCode::FileNotFound);
+                loop {
+                    match send_err.poll() {
+                        Ok(Async::Ready(_)) => return,
+                        Ok(Async::NotReady) => continue,
+                        Err(e) => panic!(format!("{}", e)),
+                    }
+                }
+            }
+        };
+        let mut send_file = SendFile::new(file, self.udp_socket.clone(), self.host_addr.clone()).unwrap();
+        send_file.run().unwrap();
+    }
+
+    fn handle_server_request(mut self, src: SocketAddr) {
+        if let Ok(Some(header)) = self.receive_header() {
+            match header {
+                Header::Write(write_header) => {
+                    self.handle_write_request(write_header);
+                },
+                Header::Read(read_header) => {
+                    self.handle_read_request(read_header);
+                },
+                _ => return
+            }
+        }
+    }
+
+    pub fn serve(mut self) {
+        use rayon::*;
+        use std::thread;
+
+        let mut pool = ThreadPoolBuilder::new().num_threads(1).build().unwrap();
+        let self_copy = self.clone();
+
+        loop {
+            let header_result = if let Ok(ref mut socket) = self.udp_socket.try_lock() {
+                Header::peek(socket)
+            } else {
+                Err(TFTPError::ConnectionClosed)
+            };
+            let mut buf = [0u8; MAX_DATA_LEN * 4];
+            match header_result {
+                Ok((Header::Read(read_header), src)) => {
+                    println!("OOFFF");
+                    let mut outgoing_self_copy = self_copy.clone();
+                    outgoing_self_copy.host_addr = src;
+                    pool.install(move || { outgoing_self_copy.handle_server_request(src) });
+                },
+                Ok((Header::Write(write_header), src)) => {
+                    println!("OOFFF2");
+                    let mut outgoing_self_copy = self_copy.clone();
+                    outgoing_self_copy.host_addr = src;
+                    pool.install(move || { outgoing_self_copy.handle_server_request(src) });
+                },
+                _ => {
+                }, // Ignore everything else
+                Err(e) => { println!("AOAOAOA") }, // oof
+            }
+            // Wait for a read or write request
+            // when that is received, move to a new thread and:
+                // send an ack to ithe request
+                // call send_file / receive file accordingly
+            thread::sleep_ms(100);
+        }
     }
 
     /*
     pub fn send_data(&mut self, data: &[u8], block_number: u32) -> Option<impl Future<Item=u32, Error=io::Error>> {
-        SendData::new(data, block_number, self.host_address.clone(), self.udp_socket.clone())
+        SendData::new(data, block_number, self.host_addr.clone(), self.udp_socket.clone())
     }
     */
 }
 
-const WINDOW_SIZE: usize = 16;
 
-pub struct SendFile {
-    /// A file backed buffer, allows the file to be indexed like an array!
-    file_map: Mmap,
+/// `TOTAL_TIMEOUT` is the amount of time that, after having not received anything, will mean the
+/// whole file-transfer process will have timed out
+#[allow(non_snake_case)]
+pub fn TOTAL_TIMEOUT() -> Duration { Duration::from_secs(10) }
 
-    /// The UDP socket to send data through
-    socket: Arc<Mutex<UdpSocket>>,
 
-    /// The host address to send data to
-    host_addr: SocketAddr,
 
-    /// Blocks that are awaiting Acks
-    blocks_pending_acks: BitSet,
 
-    /// Blocks that need to be sent again because an Ack was not received.
-    blocks_to_repeat: BitSet,
+use std::cmp::*;
 
-    /// A set of all blocks that Acks have been received for.
-    sent_blocks: BitSet,
-
-    /// The total number of blocks in the file.
-    num_blocks: usize,
-
-    /// The next block index to send.
-    next_to_send: usize,
-
-    /// The current window!
-    current_window: usize,
-
-    /// The time the current window started
-    window_start: Instant,
-
-    /// Holds a SendData object if it has not successfully been sent yet.
-    try_again: Option<SendData>,
-
-    /// A list of all of times the blocks in the current window were sent. None if it hasn't been sent yet.
-    block_times: [Option<Instant>; WINDOW_SIZE],
-
-    /// The exponential moving average of the round trip time
-    average_rtt: Duration
-}
-
-impl SendFile {
-    pub fn new(file: &File, socket: Arc<Mutex<UdpSocket>>, host_addr: SocketAddr) -> Result<Self, io::Error> {
-        let file_map = unsafe { MmapOptions::new().map(file)? };
-        let num_blocks: usize = file_map.len()?;
-        if num_blocks > (1 << 24) - 1 { return Err(io::Error::new(io::ErrorKind::Other, "Files greater than 8GB in size cannot be sent.")) }
-        // The number of whole blocks, plus another block if there is extra
-        let num_blocks: usize = num_blocks / MAX_DATA_LEN + (if num_blocks & (MAX_DATA_LEN - 1) > 0 { 1 } else { 0 });
-
-        let mut sent_blocks = BitSet::with_capacity(num_blocks);
-
-        Ok(SendFile {
-            file_map,
-            socket,
-            host_addr,
-            sent_blocks: BitSet::with_capacity(num_blocks),
-            blocks_pending_acks: BitSet::with_capacity(num_blocks),
-            blocks_to_repeat: BitSet::with_capacity(num_blocks),
-            num_blocks,
-            next_to_send: 0,
-            try_again: None,
-            current_window: 0,
-            window_start: Instant::now(),
-            block_times: [None; WINDOW_SIZE],
-            average_rtt: Duration::from_secs(1)
-        })
-    }
-
-    pub fn num_windows(&self) -> usize {
-        self.num_blocks / 16 + (if self.num_blocks & 15 == 0 { 0 } else { 1 })
-    }
-
-    pub fn get_block_n(&self, block_number: usize) -> Option<SendData> {
-        SendData::new(data, block_number, self.host_addr.clone(), self.socket.clone())
-    }
-
-    /// Will continue to return Some(..) until the current window has reached its end, or there is no more data to send.
-    pub fn next_block(&mut self) -> Option<SendData> {
-        // If we haven't sent any of the blocks in the current window
-        if self.next_to_send < WINDOW_SIZE * self.current_window {
-            let send_data = self.get_block_n(self.next_to_send);
-            match send_data {
-                send_data @ Some(_) => {
-                    self.next_to_send += 1;
-                    send_data
-                },
-                none @ None => { none }
-            }
-        } else {
-        // We've sent all of the blocks in the current window, if they've all received Acks, lets
-        // move to the next window; otherwise, wait until we have received acks for all of them.
-            let window_base = WINDOW_SIZE * self.current_window;
-            for i in window_base..window_base + WINDOW_SIZE {
-                if self.blocks_pending_acks.contains(i) {
-                    let send_time: Instant = self.block_times[i & (WIDOW_SIZE - 1)].unwrap();
-                    if send_time.elapsed() > self.average_rtt.mul(2) {
-                        self.blocks_pending_acks.remove(i);
-                        return Some(self.get_block_n(i))
-                    }
-                }
-            }
-            self.window_start = Instant::now();
-            self.current_window += 1;
-
-            // If currentwindow < self.num_blocks / WINDOW_SIZE that means the self.current_window
-            // is actually a valid window
-            if self.current_window < self.num_blocks / WINDOW_SIZE {
-                self.next_block()
-            } else {
-                None
-            }
-        }
-    }
-
-    fn send_data(&mut self, mut to_send: SendData) -> Poll<(), io::Error> {
-        match to_send.poll() {
-                Ok(Async::Ready(block_number)) => {
-                    self.blocks_pending_acks.insert(block_number);
-                    self.block_times[i] = Some(Instant::now());
-                    Ok(Async::NotReady)
-                },
-                // Failed to send again... There is a maximum number of times that a packet can be sent so try it again.
-                Ok(Async::NotReady) => {
-                    if to_send.send_attempts < MAX_ATTEMPTS {
-                        self.try_again = Some(to_send);
-                        Ok(Async::NotReady)
-                    } else {
-                        Err(io::Error::new(io::ErrorKind::Other, "Failed to send packet too many times consecutively."))
-                    }
-                },
-                Err(e) => Err(e)
-        }
-    }
-
-    fn update_average_rtt(&mut self, rtt: Duration) {
-        // hopefully this will be compiles and optimized to 5 bit shifts and one subtract op.
-        self.average_rtt = rtt.div(16) + self.average_rtt.mul(15).div(16);
-    }
-}
-
-impl Future for SendFile {
-    type Item = ();
-    type Error = io::Error;
-
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-
-        if let Some(to_send) = self.try_again.take() {
-            // Try to send this data again, if it succesfully gets sent, add it to the blocks_pending_acks set
-            self.send_data(to_send)
-        } else if let Some(send_data) = self.next_block() {
-            // try to send this data, if it successfully gets sent, add it to the blocks_pending_acks set
-            self.send_data(to_send)
-        } else {
-            // we've sent all of our packets in this window already, but haven't received acks for everything.
-            // If it has been a reasonable amount of time, add everything to a "to-resend" set,
-            // and send all of them. Also, reset the window_start so this code wont execute unless it
-            // has been a ong enough time to justify another resend.
-
-            let no_blocks_pending = self.blocks_pending_acks.is_empty();
-            let no_blocks_to_repeat = self.blocks_to_repeat.is_empty();
-            // Check if we're done!
-            if no_blocks_pending && no_blocks_to_repeat && self.blocks_received_acks.len() == self.num_blocks {
-                return Ok(Async::Ready(()))
-            }
-
-            let blocks_p
-        }
-    }
-}
 
 pub struct SendData {
     /// The encoded header
     raw_header: RawRequest,
 
-    send_attempts: u32,
+    pub send_attempts: usize,
 
     /// UDP Socket handle
     socket: Arc<Mutex<UdpSocket>>,
 
     host_addr: SocketAddr,
 
-    block_number: usize
+    pub block_number: usize
 }
 
 impl SendData {
@@ -268,6 +230,16 @@ impl SendData {
         let data_header = data_header.unwrap();
         Some(SendData { raw_header: data_header.into(), send_attempts: 0, block_number, socket, host_addr })
     }
+
+    pub fn new_empty(block_number: usize, host_addr: SocketAddr, socket: Arc<Mutex<UdpSocket>>) -> SendData {
+        SendData {
+            raw_header: DataHeader::new_empty(block_number).into(),
+            send_attempts: 0,
+            host_addr,
+            socket,
+            block_number
+        }
+    }
 }
 
 impl Future for SendData {
@@ -275,9 +247,8 @@ impl Future for SendData {
     type Error = io::Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        let mut lock = self.socket.try_lock();
-        if let Ok(ref mut socket) = lock {
-            match (*socket).send_to(self.raw_header.as_ref(), self.host_addr) {
+        if let Ok(ref mut socket) = self.socket.try_lock() {
+            match socket.send_to(self.raw_header.as_ref(), self.host_addr) {
                 Ok(bytes_written) => {
                     if bytes_written != self.raw_header.len() {
                         Err(io::Error::new(io::ErrorKind::Other, "Failed to send all data in one UDP packet."))
@@ -301,10 +272,10 @@ impl Future for SendData {
 }
 
 pub struct SendError {
-    host_addr: SocketAddr,
+    pub host_addr: SocketAddr,
     socket: Arc<Mutex<UdpSocket>>,
-    send_attempts: usize,
-    raw_header: RawRequest
+    pub send_attempts: usize,
+    pub raw_header: RawRequest
 }
 
 impl SendError {

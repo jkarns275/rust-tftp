@@ -1,4 +1,5 @@
 #![feature(conservative_impl_trait)]
+#![feature(nll)]
 
 /// TFTP is a simple file transfer protocol, thus the name "Trivial File Transfer Protocol."
 ///
@@ -11,17 +12,17 @@ extern crate futures;
 extern crate local_ip;
 extern crate tokio_core;
 extern crate bit_set;
+extern crate bit_vec;
+extern crate rayon;
+//#[macro_use] extern crate lazy_static;
 
-#[macro_use]
-extern crate lazy_static;
-
-use futures::Future;
 
 
 pub mod error;
 pub mod client;
+mod receive;
+mod send;
 mod header;
-mod net_util;
 mod types;
 
 #[cfg(test)]
@@ -30,19 +31,34 @@ mod tests {
     use std::net::SocketAddr;
     use futures::*;
     use tokio_core::reactor::Core;
-
+    use super::client::*;
+    use std::net::*;
+    use std::thread::spawn;
+    use std::path::*;
 
     #[test]
     fn it_works() {
-        let mut core = Core::new().unwrap();
-        let mut client = client::TFTPClient::new(SocketAddr::from((net_util::LOCAL_IP.clone(), 1921)), 1920).unwrap();
-        let mut x = client.send_error(1.into());
+        let host_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 2711);
+        let client_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 12711);
 
-        let data = vec![4u8; 512];
+        let mut client =
+            TFTPClient::new(client_addr, host_addr).unwrap();
+        let mut server = TFTPClient::new(host_addr, client_addr).unwrap();
 
-        let mut y = client.send_data(&data[..], 0).unwrap();
+        let p = spawn(move || { server.serve() });
+        let q = spawn(move || {
+            let mut r = client.request_file(Path::new("test.md"), Path::new("oof.md"));
+            loop {
+                println!("oof");
+                match r.poll() {
+                    Ok(Async::Ready(_)) => return,
+                    Err(e) => { panic!(e.to_string()) },
+                    Ok(Async::NotReady) => continue,
+                }
+            }
+        });
 
-        core.run(x).unwrap();
-        core.run(y).unwrap();
+        p.join();
+        q.join();
     }
 }
