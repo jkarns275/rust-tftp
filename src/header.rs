@@ -1,3 +1,4 @@
+use rand::thread_rng;
 use error::TFTPError;
 use std::cmp;
 use types::*;
@@ -10,7 +11,7 @@ use std::io;
 
 /// Since packets are small, just allocate the same amount of memory for each buffer. Increase this
 /// if data is being truncated.
-const BUFF_ALLOCATION_SIZE: usize = 1024;
+const BUFF_ALLOCATION_SIZE: usize = MAX_DATA_LEN * 2;
 
 const OPCODE_RRQ: u8 = 1;
 const OPCODE_WRQ: u8 = 2;
@@ -36,14 +37,26 @@ impl Header {
                     Err(TFTPError::WrongHost)
                 } else {
                     let _ = socket.recv_from(buf.as_mut());
-                    Ok(match buf[1] {
+                    let buf = &buf[0..bytes_read as usize]; 
+                    let res = Ok(match buf[1] {
                         OPCODE_RRQ => Header::Read(RWHeader::<ReadHeader>::from_raw(&buf)?),
-                        OPCODE_WRQ => Header::Write(RWHeader::<WriteHeader>::from_raw(&buf)?),
-                        OPCODE_ACK => Header::Ack(AckHeader::from_raw(&buf)?),
-                        OPCODE_ERROR => Header::Error(ErrorHeader::from_raw(&buf)?),
-                        OPCODE_DATA => Header::Data(DataHeader::from_raw(&buf)?),
-                        _ => Header::Invalid(buf.into_boxed_slice())
-                    })
+                        OPCODE_WRQ => Header::Write(RWHeader::<WriteHeader>::from_raw(buf)?),
+                        OPCODE_ACK => Header::Ack(AckHeader::from_raw(buf)?),
+                        OPCODE_ERROR => Header::Error(ErrorHeader::from_raw(buf)?),
+                        OPCODE_DATA => Header::Data(DataHeader::from_raw(buf)?),
+                        _ => Header::Invalid({ 
+                            let mut r = Vec::with_capacity(bytes_read);
+                            (&mut r).clone_from_slice(buf);
+                            r.into_boxed_slice() 
+                        })
+                    });
+                    use rand::Rng;
+                    if false { //(thread_rng().next_u64() & 127) < 20 {
+                        //println!("Dropping!");
+                        Err(TFTPError::IOError(io::Error::new(io::ErrorKind::Other, "Artificial Drop")))
+                    } else {
+                        res
+                    }
                 }
             },
             Err(e) => Err(TFTPError::IOError(e))
@@ -286,7 +299,7 @@ impl<T: ToRequestType> Into<RawRequest> for RWHeader<T> {
     }
 }
 
-pub const MAX_DATA_LEN: usize = 512;
+pub const MAX_DATA_LEN: usize = 1024 * 32;
 pub const DATA_HEADER_LEN: usize = 4;
 
 /// Represents a data header; either sent or received.
@@ -303,7 +316,7 @@ pub const DATA_HEADER_LEN: usize = 4;
 pub struct DataHeader {
 
     /// The data of this data of the request. up to MAX_DATA_LEN bytes.
-    pub data: [u8; MAX_DATA_LEN],
+    pub data: Vec<u8>,
     /// How many bytes of [data] are actually being used.
     pub data_len: usize,
     /// The block number. Each block is MAX_DATA_LEN bytes in size.
@@ -314,26 +327,20 @@ impl DataHeader {
 
     /// Tries to create a new data header to be sent out.
     /// Returns Some(..) unless block_number * MAX_DATA_LEN goes over the length of data_src.
-    pub fn new(mut data_src: &[u8], block_number: usize) -> Option<Self> {
-        let index = block_number as usize * MAX_DATA_LEN;
-        if data_src.len() <= index {
-            None
-        } else {
-            data_src = &data_src[index..];
-            let data_len = cmp::min(data_src.len(), MAX_DATA_LEN);
-            let mut data = [0u8; MAX_DATA_LEN];
-            data[0..data_len].copy_from_slice(&data_src[..]);
-            Some(DataHeader {
-                data,
-                block_number,
-                data_len: data_len
-            })
+    pub fn new(data_src: &[u8], block_number: usize) -> Self {
+        let data_len = cmp::min(data_src.len(), MAX_DATA_LEN);
+        let mut data = vec![0u8; MAX_DATA_LEN];
+        data[0..data_len].copy_from_slice(&data_src[..]);
+        DataHeader {
+            data,
+            block_number,
+            data_len: data_len
         }
     }
 
     pub fn new_empty(block_number: usize) -> Self {
         DataHeader {
-            data: [0u8; MAX_DATA_LEN],
+            data: vec![0u8; MAX_DATA_LEN],
             block_number,
             data_len: 0
         }
@@ -355,14 +362,14 @@ impl DataHeader {
         block_number |= (src[3] as u32);
         let block_number = block_number as usize;
 
-        let mut data = [0u8; MAX_DATA_LEN];
-        let index = cmp::min(DATA_HEADER_LEN + MAX_DATA_LEN, src.len());
-        data[0..index - DATA_HEADER_LEN]
-            .copy_from_slice(&src[DATA_HEADER_LEN..index]);
+        let mut data = vec![0u8; MAX_DATA_LEN];
+        let index = src.len();
+        data[0..cmp::min(index - 4, MAX_DATA_LEN)]
+            .copy_from_slice(&src[4..cmp::min(MAX_DATA_LEN + 4, src.len())]);
         Ok(DataHeader {
             data,
             block_number,
-            data_len: index - DATA_HEADER_LEN
+            data_len: src.len() - 4
         })
     }
 }
@@ -376,12 +383,8 @@ impl Into<RawRequest> for DataHeader {
         data[0] = block_number[0];
         data[2] = block_number[1];
         data[3] = block_number[2];
-
-        let mut i = 0;
-
-
-        data[4..self.data.len() + 4].clone_from_slice(&self.data);
-
+        
+        data[4..self.data_len + 4].clone_from_slice(&self.data[0..self.data_len]);
         data
     }
 }

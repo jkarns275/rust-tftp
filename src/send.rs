@@ -80,16 +80,19 @@ pub struct SendFile {
     send_times: HashMap<usize, Instant>,
 
     /// The exponential moving average of the round trip time
-    average_rtt: Duration
+    average_rtt: Duration,
+
+    /// The number of consecutive timeouts encountered
+    timeouts: usize,
 }
 
 impl SendFile {
-    pub fn new(file: File, socket: Arc<Mutex<UdpSocket>>, host_addr: SocketAddr) -> Result<Self, io::Error> {
+    pub fn new(socket: Arc<Mutex<UdpSocket>>, host_addr: SocketAddr, file: File) -> Result<Self, io::Error> {
         let file_map = unsafe { MmapOptions::new().map(&file)? };
         let file_len: usize = file_map.len();
         if file_len > (1 << 24) * MAX_DATA_LEN { return Err(io::Error::new(io::ErrorKind::Other, "Files greater than 8GB in size cannot be sent.")) }
         // The number of whole blocks, plus another block if there is extra
-        let num_blocks: usize = file_len / MAX_DATA_LEN + (if file_len & (MAX_DATA_LEN - 1) > 0 { 1 } else { 0 });
+        let num_blocks: usize = file_len / MAX_DATA_LEN + (if file_len & (MAX_DATA_LEN - 1) == 0 { 0 } else { 1 });
 
         let mut r = SendFile {
             file,
@@ -103,24 +106,17 @@ impl SendFile {
             try_again: None,
             timeout_pq: BinaryHeap::new(),
             send_times: HashMap::with_capacity(WINDOW_SIZE),
-            average_rtt: Duration::from_secs(1)
+            average_rtt: Duration::from_secs(1),
+            timeouts: 0
         };
         r.init()
     }
 
     fn init(mut self) -> Result<Self, io::Error> {
         // Receive an Ack for the write request... Try several times to receive an Ack
-        for i in 0..MAX_ATTEMPTS {
-            match self.receive_header() {
-                Ok(Some(Header::Ack(ack))) => break,
-                _ => {
-                    if i == MAX_ATTEMPTS - 1 {
-                        return Err(io::Error::new(io::ErrorKind::InvalidData, "Did not receive an ACK for the write request."))
-                    } else {
-                        continue
-                    }
-                }
-            }
+        match self.receive_header() {
+            Ok(Some(Header::Ack(ack))) => { /* cool */ },
+            _ =>return Err(io::Error::new(io::ErrorKind::InvalidData, "Did not receive an ACK for the write request."))
         }
 
         for _ in 0..WINDOW_SIZE {
@@ -138,7 +134,7 @@ impl SendFile {
             let r = self.poll();
             match r {
                 Ok(Async::NotReady) => continue,
-                Ok(Async::Ready(())) => return Ok(()),
+                Ok(Async::Ready(())) => { println!("Done sending"); return Ok(()) },
                 Err(e) => return Err(e)
             }
         }
@@ -147,23 +143,25 @@ impl SendFile {
     pub fn get_block_n(&self, block_number: usize) -> Option<SendData> {
         if block_number >= self.num_blocks { return None }
 
-        let mut data = vec![0u8; MAX_DATA_LEN];
+        let mut data = [0u8; MAX_DATA_LEN];
         if block_number == self.num_blocks - 1 {
-            data[0..(self.file_len - block_number * MAX_DATA_LEN)]
+            let tail_len = self.file_len - block_number * MAX_DATA_LEN;
+            data[0..tail_len]
                 .clone_from_slice(&self.file_map[block_number * MAX_DATA_LEN .. self.file_len]);
+            SendData::new(&data[0..(self.file_len - block_number * MAX_DATA_LEN)], block_number, self.host_addr.clone(), self.socket.clone())
         } else {
             data[..].clone_from_slice(&self.file_map[block_number * MAX_DATA_LEN..block_number * (MAX_DATA_LEN) + MAX_DATA_LEN]);
+            SendData::new(&data, block_number, self.host_addr.clone(), self.socket.clone())
         }
-        SendData::new(&data, block_number, self.host_addr.clone(), self.socket.clone())
     }
 
     /// Will continue to return Some(..) until the current window has reached its end, or there is no more data to send.
     pub fn next_block(&mut self) -> Option<SendData> {
         let next_block = self.next_to_send;
         self.next_to_send += 1;
-        if self.next_to_send < self.num_blocks {
-            Some(self.get_block_n(next_block).unwrap())
-        } else if self.next_to_send == self.num_blocks {
+        if next_block < self.num_blocks {
+            self.get_block_n(next_block)
+        } else if next_block == self.num_blocks && self.file_len / MAX_DATA_LEN == self.num_blocks {
             Some(SendData::new_empty(next_block, self.host_addr.clone(), self.socket.clone()))
         } else {
             None
@@ -174,7 +172,6 @@ impl SendFile {
         let time_sent = Instant::now();
         match to_send.poll() {
             Ok(Async::Ready(block_number)) => {
-                self.blocks_pending_acks.insert(block_number);
                 self.timeout_pq.push(BlockData { time_sent: time_sent.clone(), block_number });
                 *self.send_times.entry(block_number).or_insert(time_sent) = time_sent;
                 Ok(Async::NotReady)
@@ -194,10 +191,17 @@ impl SendFile {
 
     fn handle_ack(&mut self, ack_header: AckHeader) -> Poll<(), io::Error> {
         self.blocks_pending_acks.remove(ack_header.block_number as usize);
+        use std::cmp::max;
+        //for i in (max(0i64, ack_header.block_number as i64 - WINDOW_SIZE as i64) as usize .. ack_header.block_number as usize).rev() {
+          //  if self.blocks_pending_acks.contains(i) {
+          //    self.send_data(self.get_block_n(i))?;
+          //  }
+        //} 
+
         if let Some(instant) = self.send_times.remove(&(ack_header.block_number as usize)) {
             self.update_average_rtt(instant.elapsed());
         } else {
-            // This is the second Ack received for this block! No big deal
+           // This is the second Ack received for this block! No big deal
         }
         Ok(Async::NotReady)
     }
@@ -213,26 +217,20 @@ impl SendFile {
 
     fn get_timeout(&mut self) -> Option<SendData> {
         loop {
-            if !self.timeout_pq.is_empty() {
-                let possible_timeout = self.timeout_pq.peek().unwrap().clone();
-                if self.blocks_pending_acks.contains(possible_timeout.block_number) {
-                    // We're still awaiting an ack from this block and it has not gone over the
-                    // timeout threshold yet, and since the priorityqueue is sorted we know all
-                    // subsequent entries haven't surpassed the timeout either. So return none
-                    if possible_timeout.time_sent.elapsed() < self.average_rtt.mul(3) {
-                        return None
-                    }
-                    break;
-                } else {
-                    // We've already received an ack for this, remove it from the pq
-                    let _ = self.timeout_pq.pop();
+            if let Some(x) = self.timeout_pq.pop() {
+                match (self.blocks_pending_acks.contains(x.block_number), x.time_sent.elapsed() > self.average_rtt.mul(3)) {
+                    (true, true) => {
+                        return self.get_block_n(x.block_number)
+                    },                        
+                    (true, false) => { self.timeout_pq.push(x); break; },
+                    (false, true) => continue,
+                    (false, false) => continue
                 }
             } else {
-                return None
+                break;
             }
         }
-        let block_number = self.timeout_pq.pop().unwrap().block_number;
-        return self.get_block_n(block_number);
+        None
     }
 
     fn handle_error(&mut self, err_header: ErrorHeader) -> Poll<(), io::Error> {
@@ -273,23 +271,13 @@ impl Future for SendFile {
             // Try to send this data again, if it succesfully gets sent, add it to the blocks_pending_acks set
             let _ = self.send_data(to_send)?;
         }
-
-        if self.next_to_send > self.num_blocks {
-            // Done sending everything!
-            if self.blocks_pending_acks.is_empty() && self.try_again.is_none() {
-                Ok(Async::Ready(()))
-            } else {
-                // There are still timeouts to handle.
-                if let Some(x) = self.timeout_pq.pop() {
-                    if self.blocks_pending_acks.contains(x.block_number) {
-                        let data: SendData = self.get_block_n(x.block_number).unwrap();
-                        self.send_data(data)?;
-                    }
-                }
-                Ok(Async::NotReady)
-            }
+        if self.blocks_pending_acks.is_empty() && self.try_again.is_none() {
+            return Ok(Async::Ready(()));
         } else {
-
+            if let Some(data) = self.get_timeout() { self.send_data(data)?; }
+            
+            let timeouts = self.timeouts;
+            self.timeouts = 0;
             match self.receive_header() {
                 /* // Just ignore the things we don't need instead of giving up.
                 Ok(Some(Header::Invalid(_invalid))) =>
@@ -311,7 +299,6 @@ impl Future for SendFile {
                 Ok(Some(Header::Ack(ack_header))) => {
                     self.handle_ack(ack_header)?;
                     self.send_next_block()?;
-                    if let Some(data) = self.get_timeout() { self.send_data(data)?; }
                     Ok(Async::NotReady)
                 },
 
@@ -332,7 +319,16 @@ impl Future for SendFile {
                             eprintln!("Encountered non-recoverable I/O error: {:?}", e);
                             Err(e)
                         },
-                        _ => Ok(Async::NotReady)
+                        Timeout => {
+                            self.timeouts = timeouts + 1;
+                            if self.timeouts > MAX_ATTEMPTS {
+                                eprintln!("Connection timed out: {:?}", e);
+                                Err(e)
+                            } else {
+                                Ok(Async::NotReady)
+                        
+                            }
+                        }
                     }
                 }
             }

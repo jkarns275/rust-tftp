@@ -51,10 +51,8 @@ impl ReceiveFile {
     }
 
     pub fn new(socket: Arc<Mutex<UdpSocket>>, host_addr: SocketAddr, mut file: File) -> Result<Self, io::Error> {
-        println!("OOOOOF");
         file.write(&[65])?;
         let file_map = unsafe { MmapOptions::new().map_mut(&file)? };
-        println!("AAAA");
         let mut r = ReceiveFile {
             file,
             file_map,
@@ -79,7 +77,7 @@ impl ReceiveFile {
             let r = self.poll();
             match r {
                 Ok(Async::NotReady) => continue,
-                Ok(Async::Ready(())) => return Ok(()),
+                Ok(Async::Ready(())) => { println!("Finished receive"); return Ok(()) },
                 Err(e) => return Err(e)
             }
         }
@@ -87,34 +85,47 @@ impl ReceiveFile {
 
     pub fn handle_data(&mut self, data: DataHeader) -> Result<Option<()>, io::Error> {
         self.last_time = Instant::now();
-
         if let Some(highest_block) = self.highest_block.take() {
-            if highest_block < data.block_number {
-                self.highest_block = Some(data.block_number);
+            self.highest_block = Some(data.block_number);
+            let new_len = (MAX_DATA_LEN * (data.block_number as usize) + data.data_len) as u64;
+            if highest_block < data.block_number || self.file_map.len() < new_len as usize {
                 self.file_map.flush()?;
                 let current_len = self.file_map.len();
-                self.file.set_len((MAX_DATA_LEN * (data.block_number as usize - 1) + data.data_len) as u64)?;
+                let new_len = (MAX_DATA_LEN * (data.block_number as usize) + data.data_len) as u64;
+                self.file.set_len(new_len)?;
+                self.file.flush()?;
+                self.file_map = unsafe {
+                    MmapOptions::new().len(new_len as usize).map_mut(&self.file)?
+                };
             }
         } else {
-            self.highest_block = Some(0);
+            self.highest_block = Some(data.block_number);
             self.file_map.flush()?;
             let current_len = self.file_map.len();
-            self.file.set_len(data.data_len as u64)?;
+            let new_len = (MAX_DATA_LEN * data.block_number + data.data_len) as u64;
+            self.file.set_len(new_len)?;
+            self.file.flush()?;
+            self.file_map = unsafe {
+                MmapOptions::new().len(new_len as usize).map_mut(&self.file)?
+            };
         }
 
         self.received.insert(data.block_number as usize);
 
-        println!("HMM");
         // This means it is the last data header.
         if data.data_len < MAX_DATA_LEN {
             self.received_last_block = true;
-            println!("SAD");
-            self.file_map[data.block_number * MAX_DATA_LEN..]
-                .copy_from_slice(&data.data[0..data.data_len]);
-            println!("AA");
+            if data.data_len > 0 {
+                let start = data.block_number * MAX_DATA_LEN;
+                let end = start + data.data_len;
+                self.file_map[start..end]
+                    .copy_from_slice(&data.data[0..data.data_len]); 
+            }
             self.send_ack(data.block_number)
         } else {
-            self.file_map[data.block_number * MAX_DATA_LEN..data.block_number * MAX_DATA_LEN + MAX_DATA_LEN]
+            let start = data.block_number * MAX_DATA_LEN;
+            let end = start + MAX_DATA_LEN;
+            self.file_map[start..end]
                 .copy_from_slice(&data.data);
             self.send_ack(data.block_number as usize)
         }
@@ -153,6 +164,18 @@ impl ReceiveFile {
         }
     }
 
+    fn send_error(&mut self, error_header: ErrorHeader) -> Result<(), io::Error> {
+        if let Ok(ref mut socket) = self.socket.try_lock() {
+            match Header::Error(ErrorHeader { error_code: 0u16.into(), error_message: "Giving up 😞".to_string() })
+                    .send(self.host_addr.clone(), socket) {
+                Err(e) => Err(e),
+                _ => Ok(())
+            }
+        } else {
+            Err(io::Error::new(io::ErrorKind::Other, "Failed to obtain UDP Socket lock"))
+        }
+    }
+
     fn fail(&mut self, err: io::Error) -> Poll<(), io::Error> {
         for i in 0..MAX_ATTEMPTS {
             if let Ok(ref mut socket) = self.socket.try_lock() {
@@ -173,7 +196,6 @@ impl Future for ReceiveFile {
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         use header::Header::*;
-
         if self.received_last_block {
             let mut contains_all = true;
             for i in (0..self.highest_block.unwrap()).rev() {
@@ -181,6 +203,7 @@ impl Future for ReceiveFile {
                 if !contains_all { break }
             }
             if contains_all {
+                self.send_error(ErrorHeader::new(ErrorCode::Undefined, "File transfer finished".to_string()).unwrap())?;
                 return Ok(Async::Ready(()))
             }
         }
@@ -195,7 +218,6 @@ impl Future for ReceiveFile {
             Ok(Some(Data(data_header))) => {
                 // If writing to the file fails, try several times. If it continues to fail, give
                 // up.
-                println!("Angery");
                 for i in 0..MAX_ATTEMPTS {
                     match self.handle_data(data_header.clone()) {
                         Err(e) => {

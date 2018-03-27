@@ -14,6 +14,7 @@ extern crate tokio_core;
 extern crate bit_set;
 extern crate bit_vec;
 extern crate rayon;
+extern crate rand;
 //#[macro_use] extern crate lazy_static;
 
 
@@ -37,19 +38,19 @@ mod tests {
     use std::path::*;
 
     #[test]
-    fn it_works() {
+    fn test_download() {
+        return;
         let host_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 2711);
         let client_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 12711);
 
         let mut client =
-            TFTPClient::new(client_addr, host_addr).unwrap();
-        let mut server = TFTPClient::new(host_addr, client_addr).unwrap();
+            TFTPClient::new(client_addr, host_addr, "data/client_data".to_string()).unwrap();
+        let mut server = TFTPClient::new(host_addr, client_addr, "data/server_data".to_string()).unwrap();
 
         let p = spawn(move || { server.serve() });
         let q = spawn(move || {
             let mut r = client.request_file(Path::new("test.md"), Path::new("oof.md"));
             loop {
-                println!("oof");
                 match r.poll() {
                     Ok(Async::Ready(_)) => return,
                     Err(e) => { panic!(e.to_string()) },
@@ -58,7 +59,30 @@ mod tests {
             }
         });
 
-        p.join();
         q.join();
+    }
+
+    #[test]
+    fn test_upload() {
+        let host_addr = SocketAddr::new(IpAddr::V6(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1)), 22711);
+        let client_addr = SocketAddr::new(IpAddr::V6(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1)), 32711);
+
+        let mut client =
+            TFTPClient::new(client_addr, host_addr, "data/client_data".to_string()).unwrap();
+        let mut server = TFTPClient::new(host_addr, client_addr, "data/server_data".to_string()).unwrap();
+
+        let p = spawn(move || { server.serve() });
+        let q = spawn(move || {
+            let mut r = client.send_file(Path::new("woah.jpeg"));
+            loop {
+                match r.poll() {
+                    Ok(Async::Ready(_)) => return,
+                    Err(e) => { eprintln!("{}", e.to_string()); break; },
+                    Ok(Async::NotReady) => continue,
+                }
+            }
+        });
+
+        q.join();   
     }
 }

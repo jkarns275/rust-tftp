@@ -34,6 +34,7 @@ pub enum Action {
 pub struct TFTPClient {
     host_addr: SocketAddr,
     action: Action,
+    data_folder: String,
     udp_socket: Arc<Mutex<UdpSocket>>
 }
 
@@ -41,13 +42,14 @@ unsafe impl Send for TFTPClient {}
 unsafe impl Sync for TFTPClient {}
 
 impl TFTPClient {
-    pub fn new(host_addr: SocketAddr, socket_addr: SocketAddr) -> Result<Self, io::Error> {
+    pub fn new(host_addr: SocketAddr, socket_addr: SocketAddr, data_folder: String) -> Result<Self, io::Error> {
         let mut udp_socket: UdpSocket = UdpSocket::bind(socket_addr)?;
         udp_socket.set_read_timeout(Some(Duration::from_secs(4)))?;
         udp_socket.set_write_timeout(Some(Duration::from_secs(4)))?;
 
         Ok(TFTPClient {
             action: Action::NoAction,
+            data_folder,
             host_addr,
             udp_socket: Arc::new(Mutex::new(udp_socket))
         })
@@ -58,7 +60,7 @@ impl TFTPClient {
 
     pub fn request_file<P: AsRef<Path>, S: AsRef<Path>>(&mut self, filename: P, destination: S) -> impl Future<Item=(), Error=io::Error> {
         let dest_path: &Path = destination.as_ref();
-        let dest = "data/".to_string().add(dest_path.to_str().unwrap());
+        let dest = self.data_folder.clone().add("/").add(dest_path.to_str().unwrap());
         let filename = filename.as_ref().to_str().unwrap().to_string();
 
         let addr = self.host_addr.clone();
@@ -79,8 +81,6 @@ impl TFTPClient {
         let addr = self.host_addr.clone();
         let socket = self.udp_socket.clone();
         send_read.and_then(move |_| {
-
-            println!("{}", dest);
             let mut run =
                 ReceiveFile::new(socket, addr,
                                  OpenOptions::new()
@@ -92,6 +92,38 @@ impl TFTPClient {
         })
     }
 
+    pub fn send_file<P: AsRef<Path>>(&mut self, filename: P) -> impl Future<Item=(), Error=io::Error> {
+        let filename = filename.as_ref().to_str().unwrap().to_string();
+        let file_src = self.data_folder.clone().add("/").add(&filename);
+        let addr = self.host_addr.clone();
+        let mut socket = self.udp_socket.clone();
+        let write_header = Header::Write(RWHeader::<WriteHeader>::new(filename, RWMode::Octet).unwrap());
+        let send_read = future::ok::<u32, u32>(1).then(move |_| {
+            let r = if let Ok(ref mut sock) = socket.try_lock() {
+                match write_header.send(addr, sock) {
+                    Ok(_) => Ok(Async::Ready(())),
+                    Err(e) => Err(e)
+                }
+            } else {
+                Err(io::Error::new(io::ErrorKind::Other, "Failed to obtain UDP Socket lock."))
+            };
+            r
+        });
+
+        let addr = self.host_addr.clone();
+        let socket = self.udp_socket.clone();
+        send_read.and_then(move |_| {
+            let mut run =
+                SendFile::new(socket, addr,
+                                 OpenOptions::new()
+                                     .read(true)
+                                     .write(false)
+                                     .create(false)
+                                     .open(file_src)?)?;
+                run.run()
+        })
+    }
+    
     pub fn send_error(&mut self, error: ErrorCode) -> impl Future<Item=(), Error=io::Error> {
         SendError::new(ErrorHeader::new(error, "<No description supplied>".to_string()).unwrap(), self.host_addr.clone(), self.udp_socket.clone())
     }
@@ -114,13 +146,14 @@ impl TFTPClient {
     }
 
     fn handle_write_request(&mut self, write_header: RWHeader<WriteHeader>) {
-        let mut file = File::create("./data/".to_string().add(&write_header.filename)).unwrap();
+        let path = self.data_folder.clone().add("/").add(&write_header.filename);
+        let mut file = OpenOptions::new().truncate(true).create(true).read(true).write(true).open(path).unwrap();
         let mut recv_file = ReceiveFile::new(self.udp_socket.clone(), self.host_addr.clone(), file).unwrap();
         recv_file.run().unwrap();
     }
 
     fn handle_read_request(&mut self, read_header: RWHeader<ReadHeader>) {
-        let mut file = match File::open("./data/".to_string().add(&read_header.filename)) {
+        let mut file = match File::open(self.data_folder.clone().add("/").add(&read_header.filename)) {
             Ok(a) => a,
             Err(e) => {
                 let mut send_err = self.send_error(ErrorCode::FileNotFound);
@@ -133,7 +166,7 @@ impl TFTPClient {
                 }
             }
         };
-        let mut send_file = SendFile::new(file, self.udp_socket.clone(), self.host_addr.clone()).unwrap();
+        let mut send_file = SendFile::new(self.udp_socket.clone(), self.host_addr.clone(), file).unwrap();
         send_file.run().unwrap();
     }
 
@@ -167,20 +200,18 @@ impl TFTPClient {
             let mut buf = [0u8; MAX_DATA_LEN * 4];
             match header_result {
                 Ok((Header::Read(read_header), src)) => {
-                    println!("OOFFF");
                     let mut outgoing_self_copy = self_copy.clone();
                     outgoing_self_copy.host_addr = src;
                     pool.install(move || { outgoing_self_copy.handle_server_request(src) });
                 },
                 Ok((Header::Write(write_header), src)) => {
-                    println!("OOFFF2");
                     let mut outgoing_self_copy = self_copy.clone();
                     outgoing_self_copy.host_addr = src;
                     pool.install(move || { outgoing_self_copy.handle_server_request(src) });
                 },
                 _ => {
                 }, // Ignore everything else
-                Err(e) => { println!("AOAOAOA") }, // oof
+                Err(e) => {}, // oof
             }
             // Wait for a read or write request
             // when that is received, move to a new thread and:
@@ -226,8 +257,6 @@ pub struct SendData {
 impl SendData {
     pub fn new(data: &[u8], block_number: usize, host_addr: SocketAddr, socket: Arc<Mutex<UdpSocket>>) -> Option<SendData> {
         let data_header = DataHeader::new(data, block_number);
-        if data_header.is_none() { return None }
-        let data_header = data_header.unwrap();
         Some(SendData { raw_header: data_header.into(), send_attempts: 0, block_number, socket, host_addr })
     }
 
