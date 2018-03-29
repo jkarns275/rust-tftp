@@ -147,7 +147,7 @@ fn request(local_addr: SocketAddr, host_addr: SocketAddr, url: String, window_si
 
 static HELP: &'static str = r#"
 client usage: 
-    command [options] [local port] [server ip] [url]
+    command [options] [local ip] [server ip] [url]
     server ip is, by default, localhost
 to run in server mode:
     command [--ipv4]? -s
@@ -243,13 +243,13 @@ fn pmain(mut args: Vec<String>) {
 
     // command [options] [local port] [server ip] [url]
     
-    let port = if let Ok(p) = args[0].parse::<u16>() {
+    let local_addr = if let Ok(p) = SocketAddr::from_str(&args[0]) {
         p
     } else {
-        println!("'{}' is not a valid local port", args[0]);
+        println!("'{}' is not a valid local ip", args[0]);
         println!("{}", HELP);
         return;
-    };    
+    };   
 
     use std::str::FromStr;
     let server_addr = if let Ok(p) = SocketAddr::from_str(&args[1]) {
@@ -259,11 +259,12 @@ fn pmain(mut args: Vec<String>) {
         println!("{}", HELP);
         return;
     };
-    let local_addr = if server_addr.is_ipv4() {
+
+    /*let local_addr = if server_addr.is_ipv4() {
         SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), port))
     } else {
         SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0), port, 0, 0)) 
-    };
+    };*/
 
     let url = args[2].clone();
 
@@ -271,7 +272,7 @@ fn pmain(mut args: Vec<String>) {
     
     request(local_addr, server_addr, url, window_size);
 }
-
+/*
 extern crate test;
 
 #[cfg(test)]
@@ -314,4 +315,4 @@ mod tests {
                            .map(str::to_string)
                            .collect::<Vec<String>>()))
     }
-}
+}*/
