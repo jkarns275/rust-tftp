@@ -277,8 +277,9 @@ impl SendFile {
 
     fn receive_header(&mut self) -> Result<Option<Header>, io::Error> {
         if let Ok(ref mut socket) = self.socket.try_lock() {
-            match Header::recv(self.host_addr.clone(), socket) {
-                Ok(r)   => Ok(Some(r)),
+          socket.set_read_timeout(Some(self.average_rtt.clone()))?;  
+	  match Header::recv(self.host_addr.clone(), socket) {
+                Ok(r)   => { Ok(Some(r)) },
                 Err(e)  => {
                     if let TFTPError::IOError(ioerr) = e {
                         Err(ioerr)
@@ -368,7 +369,10 @@ impl Future for SendFile {
                                 Ok(Async::NotReady)
                         
                             }
-                        }
+                        },
+			WouldBlock => {
+				Ok(Async::NotReady)
+			}
                     }
                 }
             }

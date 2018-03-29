@@ -211,7 +211,6 @@ impl Future for ReceiveFile {
         if self.last_time.elapsed() > TOTAL_TIMEOUT() {
             return self.fail(io::Error::new(io::ErrorKind::TimedOut, "TFTP connection appears to be dead."))
         }
-
         let prev_error_count = self.error_count;
         self.error_count = 0;
         match self.receive_header() {

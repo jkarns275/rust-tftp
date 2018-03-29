@@ -102,7 +102,7 @@ fn server(addr: SocketAddr, window_size: usize) {
     let mut cache = get_cache().unwrap();
     loop {
         let header_result = if let Ok(ref mut socket) = server.udp_socket.try_lock() {
-            socket.set_read_timeout(None);
+            socket.set_read_timeout(Some(Duration::from_secs(4)));
             Header::peek(socket)
         } else {
             Err(TFTPError::ConnectionClosed)
@@ -191,9 +191,9 @@ fn pmain(mut args: Vec<String>) {
                         return;
                     };    
                     if use_ipv4 { 
-                        server(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), port)), window_size);
+                        server(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), port)), window_size);
                     } else {
-                        server(SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1), port, 0, 0)), window_size);
+                        server(SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0), port, 0, 0)), window_size);
                     }
                     return;
                 },
@@ -260,9 +260,9 @@ fn pmain(mut args: Vec<String>) {
         return;
     };
     let local_addr = if server_addr.is_ipv4() {
-        SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), port))
+        SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), port))
     } else {
-        SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1), port, 0, 0)) 
+        SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0), port, 0, 0)) 
     };
 
     let url = args[2].clone();
