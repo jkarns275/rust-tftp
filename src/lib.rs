@@ -21,10 +21,10 @@ extern crate rand;
 
 pub mod error;
 pub mod client;
-mod receive;
-mod send;
-mod header;
-mod types;
+pub mod receive;
+pub mod send;
+pub mod header;
+pub mod types;
 
 #[cfg(test)]
 mod tests {
@@ -44,8 +44,8 @@ mod tests {
         let client_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 12711);
 
         let mut client =
-            TFTPClient::new(client_addr, host_addr, "data/client_data".to_string()).unwrap();
-        let mut server = TFTPClient::new(host_addr, client_addr, "data/server_data".to_string()).unwrap();
+            TFTPClient::new(client_addr, host_addr, "data/client_data".to_string(), 16).unwrap();
+        let mut server = TFTPClient::new(host_addr, client_addr, "data/server_data".to_string(), 16).unwrap();
 
         let p = spawn(move || { server.serve() });
         let q = spawn(move || {
@@ -68,12 +68,12 @@ mod tests {
         let client_addr = SocketAddr::new(IpAddr::V6(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1)), 32711);
 
         let mut client =
-            TFTPClient::new(client_addr, host_addr, "data/client_data".to_string()).unwrap();
-        let mut server = TFTPClient::new(host_addr, client_addr, "data/server_data".to_string()).unwrap();
+            TFTPClient::new(client_addr, host_addr, "data/client_data".to_string(), 16).unwrap();
+        let mut server = TFTPClient::new(host_addr, client_addr, "data/server_data".to_string(), 16).unwrap();
 
         let p = spawn(move || { server.serve() });
         let q = spawn(move || {
-            let mut r = client.send_file(Path::new("woah.jpeg"));
+            let mut r = client.send_file(Path::new("oof.md"));
             loop {
                 match r.poll() {
                     Ok(Async::Ready(_)) => return,

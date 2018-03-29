@@ -16,7 +16,7 @@ use std::cmp::*;
 use header::*;
 use client::*;
 
-pub const WINDOW_SIZE: usize = 16;
+//pub const WINDOW_SIZE: usize = 1;
 
 #[derive(Clone)]
 struct BlockData {
@@ -87,7 +87,7 @@ pub struct SendFile {
 }
 
 impl SendFile {
-    pub fn new(socket: Arc<Mutex<UdpSocket>>, host_addr: SocketAddr, file: File) -> Result<Self, io::Error> {
+    pub fn new(socket: Arc<Mutex<UdpSocket>>, host_addr: SocketAddr, file: File, window_size: usize) -> Result<Self, io::Error> {
         let file_map = unsafe { MmapOptions::new().map(&file)? };
         let file_len: usize = file_map.len();
         if file_len > (1 << 24) * MAX_DATA_LEN { return Err(io::Error::new(io::ErrorKind::Other, "Files greater than 8GB in size cannot be sent.")) }
@@ -105,21 +105,66 @@ impl SendFile {
             next_to_send: 0,
             try_again: None,
             timeout_pq: BinaryHeap::new(),
-            send_times: HashMap::with_capacity(WINDOW_SIZE),
+            send_times: HashMap::with_capacity(window_size),
             average_rtt: Duration::from_secs(1),
             timeouts: 0
         };
-        r.init()
+        r.init(window_size)
     }
 
-    fn init(mut self) -> Result<Self, io::Error> {
+    pub fn new_server(socket: Arc<Mutex<UdpSocket>>, host_addr: SocketAddr, file: File, window_size: usize) -> Result<Self, io::Error> {
+        let file_map = unsafe { MmapOptions::new().map(&file)? };
+        let file_len: usize = file_map.len();
+        if file_len > (1 << 24) * MAX_DATA_LEN { return Err(io::Error::new(io::ErrorKind::Other, "Files greater than 8GB in size cannot be sent.")) }
+        // The number of whole blocks, plus another block if there is extra
+        let num_blocks: usize = file_len / MAX_DATA_LEN + (if file_len & (MAX_DATA_LEN - 1) == 0 { 0 } else { 1 });
+
+        let mut r = SendFile {
+            file,
+            file_map,
+            file_len,
+            socket,
+            host_addr,
+            num_blocks,
+            blocks_pending_acks: BitSet::from_bit_vec(BitVec::from_elem(num_blocks, true)),
+            next_to_send: 0,
+            try_again: None,
+            timeout_pq: BinaryHeap::new(),
+            send_times: HashMap::with_capacity(window_size),
+            average_rtt: Duration::from_secs(1),
+            timeouts: 0
+        };
+        
+        r.server_init(window_size) 
+    }
+
+    fn server_init(mut self, window_size: usize) -> Result<Self, io::Error> {
+        let mut a = Header::Ack(AckHeader::new(0));
+        if let Ok(ref mut s) = self.socket.try_lock() {
+            s.set_read_timeout(Some(Duration::new(0, 500000000)))?;
+            match a.send(self.host_addr.clone(), s) {
+                Ok(()) => {},
+                Err(e) => return Err(e)
+            }
+        } else { unreachable!()}
+        for _ in 0..window_size {
+            if let Some(block) = self.next_block() {
+                self.send_data(block)?;
+            } else {
+                break
+            }
+        }
+        Ok(self)
+    }
+
+    fn init(mut self, window_size: usize) -> Result<Self, io::Error> {
         // Receive an Ack for the write request... Try several times to receive an Ack
         match self.receive_header() {
             Ok(Some(Header::Ack(ack))) => { /* cool */ },
             _ =>return Err(io::Error::new(io::ErrorKind::InvalidData, "Did not receive an ACK for the write request."))
         }
 
-        for _ in 0..WINDOW_SIZE {
+        for _ in 0..window_size {
             if let Some(block) = self.next_block() {
                 self.send_data(block)?;
             } else {
@@ -134,7 +179,7 @@ impl SendFile {
             let r = self.poll();
             match r {
                 Ok(Async::NotReady) => continue,
-                Ok(Async::Ready(())) => { println!("Done sending"); return Ok(()) },
+                Ok(Async::Ready(())) => return Ok(()),
                 Err(e) => return Err(e)
             }
         }
@@ -191,13 +236,6 @@ impl SendFile {
 
     fn handle_ack(&mut self, ack_header: AckHeader) -> Poll<(), io::Error> {
         self.blocks_pending_acks.remove(ack_header.block_number as usize);
-        use std::cmp::max;
-        //for i in (max(0i64, ack_header.block_number as i64 - WINDOW_SIZE as i64) as usize .. ack_header.block_number as usize).rev() {
-          //  if self.blocks_pending_acks.contains(i) {
-          //    self.send_data(self.get_block_n(i))?;
-          //  }
-        //} 
-
         if let Some(instant) = self.send_times.remove(&(ack_header.block_number as usize)) {
             self.update_average_rtt(instant.elapsed());
         } else {
@@ -257,6 +295,9 @@ impl SendFile {
     fn update_average_rtt(&mut self, rtt: Duration) {
         // hopefully this will be compiles and optimized to 5 bit shifts and one subtract op.
         self.average_rtt = rtt.div(16) + self.average_rtt.mul(15).div(16);
+        if let Ok(ref mut s) = self.socket.try_lock() {
+            s.set_read_timeout(Some(self.average_rtt.clone()));
+        }
     }
 }
 
@@ -265,7 +306,6 @@ impl Future for SendFile {
     type Error = io::Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-
         // Failed to send this data the first time; try it again!
         if let Some(to_send) = self.try_again.take() {
             // Try to send this data again, if it succesfully gets sent, add it to the blocks_pending_acks set

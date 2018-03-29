@@ -13,6 +13,8 @@ use std::io;
 /// if data is being truncated.
 const BUFF_ALLOCATION_SIZE: usize = MAX_DATA_LEN * 2;
 
+pub static mut DROP_THRESHOLD: u64 = 0;
+
 const OPCODE_RRQ: u8 = 1;
 const OPCODE_WRQ: u8 = 2;
 const OPCODE_DATA: u8 = 3;
@@ -51,7 +53,7 @@ impl Header {
                         })
                     });
                     use rand::Rng;
-                    if false { //(thread_rng().next_u64() & 127) < 20 {
+                    if (thread_rng().next_u64() & 127) < unsafe { DROP_THRESHOLD } {
                         //println!("Dropping!");
                         Err(TFTPError::IOError(io::Error::new(io::ErrorKind::Other, "Artificial Drop")))
                     } else {
@@ -299,7 +301,7 @@ impl<T: ToRequestType> Into<RawRequest> for RWHeader<T> {
     }
 }
 
-pub const MAX_DATA_LEN: usize = 1024 * 32;
+pub const MAX_DATA_LEN: usize = 512;
 pub const DATA_HEADER_LEN: usize = 4;
 
 /// Represents a data header; either sent or received.

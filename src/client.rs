@@ -19,36 +19,25 @@ use receive::ReceiveFile;
 
 pub const MAX_ATTEMPTS: usize = 8;
 
-/// Represents what action a TFTPClient is currently performing. By default, a TFTPClient will have
-/// the Action::NoAction.
-#[derive(Clone, Debug)]
-pub enum Action {
-    NoAction,
-    SendFile,
-    RequestFile,
-    SendError,
-    EstablishConnection
-}
-
 #[derive(Clone)]
 pub struct TFTPClient {
-    host_addr: SocketAddr,
-    action: Action,
+    pub host_addr: SocketAddr,
     data_folder: String,
-    udp_socket: Arc<Mutex<UdpSocket>>
+    pub window_size: usize,
+    pub udp_socket: Arc<Mutex<UdpSocket>>
 }
 
 unsafe impl Send for TFTPClient {}
 unsafe impl Sync for TFTPClient {}
 
 impl TFTPClient {
-    pub fn new(host_addr: SocketAddr, socket_addr: SocketAddr, data_folder: String) -> Result<Self, io::Error> {
+    pub fn new(host_addr: SocketAddr, socket_addr: SocketAddr, data_folder: String, window_size: usize) -> Result<Self, io::Error> {
         let mut udp_socket: UdpSocket = UdpSocket::bind(socket_addr)?;
         udp_socket.set_read_timeout(Some(Duration::from_secs(4)))?;
         udp_socket.set_write_timeout(Some(Duration::from_secs(4)))?;
 
         Ok(TFTPClient {
-            action: Action::NoAction,
+            window_size,
             data_folder,
             host_addr,
             udp_socket: Arc::new(Mutex::new(udp_socket))
@@ -110,6 +99,7 @@ impl TFTPClient {
             r
         });
 
+        let window_size = self.window_size;
         let addr = self.host_addr.clone();
         let socket = self.udp_socket.clone();
         send_read.and_then(move |_| {
@@ -119,7 +109,7 @@ impl TFTPClient {
                                      .read(true)
                                      .write(false)
                                      .create(false)
-                                     .open(file_src)?)?;
+                                     .open(file_src)?, window_size)?;
                 run.run()
         })
     }
@@ -128,7 +118,7 @@ impl TFTPClient {
         SendError::new(ErrorHeader::new(error, "<No description supplied>".to_string()).unwrap(), self.host_addr.clone(), self.udp_socket.clone())
     }
 
-    fn receive_header(&mut self) -> Result<Option<Header>, io::Error> {
+    pub fn receive_header(&mut self) -> Result<Option<Header>, io::Error> {
         if let Ok(ref mut socket) = self.udp_socket.try_lock() {
             match Header::recv(self.host_addr.clone(), socket) {
                 Ok(r)   => Ok(Some(r)),
@@ -145,32 +135,32 @@ impl TFTPClient {
         }
     }
 
-    fn handle_write_request(&mut self, write_header: RWHeader<WriteHeader>) {
+    pub fn handle_write_request(&mut self, write_header: RWHeader<WriteHeader>) -> Result<(), io::Error> {
         let path = self.data_folder.clone().add("/").add(&write_header.filename);
-        let mut file = OpenOptions::new().truncate(true).create(true).read(true).write(true).open(path).unwrap();
-        let mut recv_file = ReceiveFile::new(self.udp_socket.clone(), self.host_addr.clone(), file).unwrap();
-        recv_file.run().unwrap();
+        let mut file = OpenOptions::new().truncate(true).create(true).read(true).write(true).open(path)?;
+        let mut recv_file = ReceiveFile::new(self.udp_socket.clone(), self.host_addr.clone(), file)?;
+        recv_file.run()
     }
 
-    fn handle_read_request(&mut self, read_header: RWHeader<ReadHeader>) {
+    pub fn handle_read_request(&mut self, read_header: RWHeader<ReadHeader>) -> Result<(), io::Error> {
         let mut file = match File::open(self.data_folder.clone().add("/").add(&read_header.filename)) {
             Ok(a) => a,
             Err(e) => {
                 let mut send_err = self.send_error(ErrorCode::FileNotFound);
                 loop {
                     match send_err.poll() {
-                        Ok(Async::Ready(_)) => return,
+                        Ok(Async::Ready(_)) => return Err(e),
                         Ok(Async::NotReady) => continue,
                         Err(e) => panic!(format!("{}", e)),
                     }
                 }
             }
         };
-        let mut send_file = SendFile::new(self.udp_socket.clone(), self.host_addr.clone(), file).unwrap();
-        send_file.run().unwrap();
+        let mut send_file = SendFile::new_server(self.udp_socket.clone(), self.host_addr.clone(), file, self.window_size).unwrap();
+        send_file.run()
     }
 
-    fn handle_server_request(mut self, src: SocketAddr) {
+    pub fn handle_server_request(mut self, src: SocketAddr) {
         if let Ok(Some(header)) = self.receive_header() {
             match header {
                 Header::Write(write_header) => {

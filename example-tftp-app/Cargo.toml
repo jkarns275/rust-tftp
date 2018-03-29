@@ -1,0 +1,13 @@
+[package]
+name = "example-tftp-app"
+version = "0.1.0"
+authors = ["Joshua Karns <jkarns275@gmail.com>"]
+
+[dependencies]
+tftp = { path = "../", version = "*" }
+rpds = { version = "0.4.0", features = ["serde"] }
+serde = "*"
+futures = "0.1.17"
+tokio-core = "*"
+hyper = "*"
+bincode = "1.0.0"

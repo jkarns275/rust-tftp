@@ -77,7 +77,7 @@ impl ReceiveFile {
             let r = self.poll();
             match r {
                 Ok(Async::NotReady) => continue,
-                Ok(Async::Ready(())) => { println!("Finished receive"); return Ok(()) },
+                Ok(Async::Ready(())) => return Ok(()),
                 Err(e) => return Err(e)
             }
         }
