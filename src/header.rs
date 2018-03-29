@@ -35,7 +35,8 @@ impl Header {
         let mut buf = vec![0u8; BUFF_ALLOCATION_SIZE];
         match socket.peek_from(buf.as_mut()) {
             Ok((bytes_read, src_addr)) => {
-                if from != src_addr {
+                if from.ip() != src_addr.ip() || from.port() != src_addr.port() {
+		    println!("oof");
                     Err(TFTPError::WrongHost)
                 } else {
                     let _ = socket.recv_from(buf.as_mut());
@@ -301,7 +302,7 @@ impl<T: ToRequestType> Into<RawRequest> for RWHeader<T> {
     }
 }
 
-pub const MAX_DATA_LEN: usize = 512;
+pub const MAX_DATA_LEN: usize = 1024 * 4;
 pub const DATA_HEADER_LEN: usize = 4;
 
 /// Represents a data header; either sent or received.
