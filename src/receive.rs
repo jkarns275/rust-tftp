@@ -270,7 +270,6 @@ impl Future for ReceiveFile {
             Ok(Some(_)) | Ok(None) => return Ok(Async::NotReady),
 
             Err(e) => {
-                println!("Howdy {:?}", e);
                 if e.kind() == io::ErrorKind::TimedOut || e.kind() == io::ErrorKind::WouldBlock {
                     if let Some(block_number) = self.consec_recv.as_ref() {
                         self.send_ack(*block_number)?;
