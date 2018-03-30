@@ -33,6 +33,9 @@ pub struct ReceiveFile {
     /// A set that contains the block_number of received blocks.
     received: BitSet,
 
+    /// The highest block that has been received, along with all blocks before it.
+    consec_recv: Option<usize>,
+
     socket: Arc<Mutex<UdpSocket>>,
 
     host_addr: SocketAddr,
@@ -51,13 +54,15 @@ impl ReceiveFile {
     }
 
     pub fn new(socket: Arc<Mutex<UdpSocket>>, host_addr: SocketAddr, mut file: File) -> Result<Self, io::Error> {
-        file.write(&[65])?;
+        // If file is empty some strange error related to mmap happens, so write a single null byte!
+        file.write(&[0])?;
         let file_map = unsafe { MmapOptions::new().map_mut(&file)? };
         let mut r = ReceiveFile {
             file,
             file_map,
             socket,
             host_addr,
+            consec_recv: None,
             received: BitSet::new(),
             received_last_block: false,
             highest_block: None,
@@ -121,14 +126,13 @@ impl ReceiveFile {
                 self.file_map[start..end]
                     .copy_from_slice(&data.data[0..data.data_len]); 
             }
-            self.send_ack(data.block_number)
         } else {
             let start = data.block_number * MAX_DATA_LEN;
             let end = start + MAX_DATA_LEN;
             self.file_map[start..end]
                 .copy_from_slice(&data.data);
-            self.send_ack(data.block_number as usize)
         }
+        Ok(Some(()))
     }
 
     /// # Returns
@@ -149,6 +153,7 @@ impl ReceiveFile {
 
     fn receive_header(&mut self) -> Result<Option<Header>, io::Error> {
         if let Ok(ref mut socket) = self.socket.try_lock() {
+            socket.set_read_timeout(Some(Duration::new(0, 500000000)))?;
             match Header::recv(self.host_addr.clone(), socket) {
                 Ok(r)   => Ok(Some(r)),
                 Err(e)  => {
@@ -196,14 +201,38 @@ impl Future for ReceiveFile {
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         use header::Header::*;
+
+        if self.consec_recv.is_none() {
+            if self.received.contains(0) {
+                self.consec_recv = Some(0);
+            }
+        }
+
+        if self.consec_recv.is_some() {
+            let mut consec_recv = self.consec_recv.unwrap();
+            let original = consec_recv;
+            loop {
+                if self.received.contains(consec_recv + 1) {
+                    consec_recv += 1;
+                    continue;
+                } else {
+                    break;
+                }
+            }
+            self.consec_recv = Some(consec_recv);
+        }
+
         if self.received_last_block {
             let mut contains_all = true;
-            for i in (0..self.highest_block.unwrap()).rev() {
+            for i in (0..self.highest_block.unwrap()) {
                 contains_all &= self.received.contains(i);
                 if !contains_all { break }
             }
             if contains_all {
-                self.send_error(ErrorHeader::new(ErrorCode::Undefined, "File transfer finished".to_string()).unwrap())?;
+                // Send a several ACKS to let the server know we're done here
+                for i in 0..4 {
+                    self.send_ack(self.highest_block.unwrap())?;
+                }
                 return Ok(Async::Ready(()))
             }
         }
@@ -211,36 +240,27 @@ impl Future for ReceiveFile {
         if self.last_time.elapsed() > TOTAL_TIMEOUT() {
             return self.fail(io::Error::new(io::ErrorKind::TimedOut, "TFTP connection appears to be dead."))
         }
+        
         let prev_error_count = self.error_count;
         self.error_count = 0;
+        
         match self.receive_header() {
             Ok(Some(Data(data_header))) => {
                 // If writing to the file fails, try several times. If it continues to fail, give
                 // up.
-                for i in 0..MAX_ATTEMPTS {
-                    match self.handle_data(data_header.clone()) {
-                        Err(e) => {
-                            if i == MAX_ATTEMPTS - 1 {
-                                return self.fail(e)
-                            } else {
-                                continue
-                            }
-                        },
-                        // The lock could not be acquired :(
-                        Ok(None) => {
-                            if i == MAX_ATTEMPTS - 1 {
-                                return self.fail(io::Error::new(io::ErrorKind::WouldBlock, "Could not obtain UdpSocket mutex."))
-                            } else {
-                                continue
-                            }
-                        },
-                        // We did it!
-                        Ok(Some(())) => {
-                            return Ok(Async::NotReady)
-                        }
+                match self.handle_data(data_header.clone()) {
+                    Err(e) => {
+                        return self.fail(e)
+                    },
+                    // The lock could not be acquired. This probably shouldn't be happening ever.
+                    Ok(None) => {
+                        return self.fail(io::Error::new(io::ErrorKind::WouldBlock, "Could not obtain UdpSocket mutex."))
+                    },
+                    // We did it!
+                    Ok(Some(())) => {
+                        return Ok(Async::NotReady)
                     }
                 }
-                unreachable!()
             },
 
             Ok(Some(Error(error_header))) =>
@@ -250,6 +270,12 @@ impl Future for ReceiveFile {
             Ok(Some(_)) | Ok(None) => return Ok(Async::NotReady),
 
             Err(e) => {
+                if e.kind() == io::ErrorKind::TimedOut {
+                    if let Some(block_number) = self.consec_recv.as_ref() {
+                        self.send_ack(*block_number)?;
+                    }
+                }
+
                 self.error_count = prev_error_count + 1;
                 if self.error_count > MAX_ATTEMPTS {
                     return self.fail(e)

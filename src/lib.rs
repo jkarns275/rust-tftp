@@ -1,5 +1,6 @@
 #![feature(conservative_impl_trait)]
 #![feature(nll)]
+#![feature(inclusive_range_syntax)]
 
 /// TFTP is a simple file transfer protocol, thus the name "Trivial File Transfer Protocol."
 ///
@@ -73,7 +74,7 @@ mod tests {
 
         let p = spawn(move || { server.serve() });
         let q = spawn(move || {
-            let mut r = client.send_file(Path::new("oof.md"));
+            let mut r = client.send_file(Path::new("woah.jpeg"));
             loop {
                 match r.poll() {
                     Ok(Async::Ready(_)) => return,
@@ -84,5 +85,6 @@ mod tests {
         });
 
         q.join();   
+        println!("oof");
     }
 }
