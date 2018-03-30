@@ -36,7 +36,6 @@ impl Header {
         match socket.peek_from(buf.as_mut()) {
             Ok((bytes_read, src_addr)) => {
                 if from.ip() != src_addr.ip() || from.port() != src_addr.port() {
-		    println!("oof");
                     Err(TFTPError::WrongHost)
                 } else {
                     let _ = socket.recv_from(buf.as_mut());
@@ -55,7 +54,6 @@ impl Header {
                     });
                     use rand::Rng;
                     if (thread_rng().next_u64() & 127) < unsafe { DROP_THRESHOLD } {
-                        //println!("Dropping!");
                         Err(TFTPError::IOError(io::Error::new(io::ErrorKind::Other, "Artificial Drop")))
                     } else {
                         res
@@ -302,7 +300,7 @@ impl<T: ToRequestType> Into<RawRequest> for RWHeader<T> {
     }
 }
 
-pub const MAX_DATA_LEN: usize = 1024 * 4;
+pub const MAX_DATA_LEN: usize = 512;
 pub const DATA_HEADER_LEN: usize = 4;
 
 /// Represents a data header; either sent or received.

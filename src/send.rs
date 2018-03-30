@@ -268,8 +268,9 @@ impl SendFile {
                         }
                     } else {
                         if let TFTPError::IOError(ioerr) = e {
-                            if ioerr.kind() == io::ErrorKind::TimedOut {
-                                self.send_window()?;
+                            match ioerr.kind() { 
+                                io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut => self.send_window()?,
+                                _ => {}
                             }
                         }
                         self.err_counter += 1;

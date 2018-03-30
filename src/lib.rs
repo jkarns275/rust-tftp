@@ -69,8 +69,8 @@ mod tests {
         let client_addr = SocketAddr::new(IpAddr::V6(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1)), 32711);
 
         let mut client =
-            TFTPClient::new(client_addr, host_addr, "data/client_data".to_string(), 16).unwrap();
-        let mut server = TFTPClient::new(host_addr, client_addr, "data/server_data".to_string(), 16).unwrap();
+            TFTPClient::new(client_addr, host_addr, "data/client_data".to_string(), 1).unwrap();
+        let mut server = TFTPClient::new(host_addr, client_addr, "data/server_data".to_string(), 1).unwrap();
 
         let p = spawn(move || { server.serve() });
         let q = spawn(move || {

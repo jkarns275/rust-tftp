@@ -153,7 +153,7 @@ impl ReceiveFile {
 
     fn receive_header(&mut self) -> Result<Option<Header>, io::Error> {
         if let Ok(ref mut socket) = self.socket.try_lock() {
-            socket.set_read_timeout(Some(Duration::new(0, 500000000)))?;
+            socket.set_read_timeout(Some(Duration::new(0, 100000000)))?;
             match Header::recv(self.host_addr.clone(), socket) {
                 Ok(r)   => Ok(Some(r)),
                 Err(e)  => {
@@ -270,7 +270,8 @@ impl Future for ReceiveFile {
             Ok(Some(_)) | Ok(None) => return Ok(Async::NotReady),
 
             Err(e) => {
-                if e.kind() == io::ErrorKind::TimedOut {
+                println!("Howdy {:?}", e);
+                if e.kind() == io::ErrorKind::TimedOut || e.kind() == io::ErrorKind::WouldBlock {
                     if let Some(block_number) = self.consec_recv.as_ref() {
                         self.send_ack(*block_number)?;
                     }
