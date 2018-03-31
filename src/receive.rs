@@ -43,6 +43,9 @@ pub struct ReceiveFile {
     /// The number of errors that have occured sequentially (i.e. one after the other)
     error_count: usize,
 
+    /// The average time between packets from the server.
+    packet_time: Duration,
+
     /// The time at which the last data packet was received.
     last_time: Instant
 }
@@ -67,9 +70,17 @@ impl ReceiveFile {
             received_last_block: false,
             highest_block: None,
             error_count: 0,
+            packet_time: Duration::new(1, 0),
             last_time: Instant::now()
         };
         r.init()
+    }
+
+    fn update_average(&mut self) {
+        let elapsed = self.last_time.elapsed();
+        self.last_time = Instant::now();
+        self.packet_time = elapsed.mul(15);
+        self.packet_time = elapsed.div(16) + self.packet_time.mul(15).div(16);
     }
 
     fn init(mut self) -> Result<Self, io::Error> {
@@ -152,10 +163,13 @@ impl ReceiveFile {
     }
 
     fn receive_header(&mut self) -> Result<Option<Header>, io::Error> {
-        if let Ok(ref mut socket) = self.socket.try_lock() {
-            socket.set_read_timeout(Some(Duration::new(0, 100000000)))?;
+        if let Ok(ref mut socket) = self.socket.clone().try_lock() {
+            socket.set_read_timeout(Some(self.packet_time.clone().mul(3).div(2)))?;
             match Header::recv(self.host_addr.clone(), socket) {
-                Ok(r)   => Ok(Some(r)),
+                Ok(r)   => { 
+                    self.update_average();
+                    Ok(Some(r))
+                },
                 Err(e)  => {
                     if let TFTPError::IOError(ioerr) = e {
                         Err(ioerr)
