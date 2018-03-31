@@ -164,7 +164,8 @@ impl ReceiveFile {
 
     fn receive_header(&mut self) -> Result<Option<Header>, io::Error> {
         if let Ok(ref mut socket) = self.socket.clone().try_lock() {
-            socket.set_read_timeout(Some(self.packet_time.clone().mul(3).div(2)))?;
+            socket.set_read_timeout(Some(Duration::new(1, 0)))?;
+	    socket.set_read_timeout(Some(self.packet_time.clone().mul(3).div(2)))?;
             match Header::recv(self.host_addr.clone(), socket) {
                 Ok(r)   => { 
                     self.update_average();
@@ -285,6 +286,7 @@ impl Future for ReceiveFile {
 
             Err(e) => {
                 if e.kind() == io::ErrorKind::TimedOut || e.kind() == io::ErrorKind::WouldBlock {
+		    self.packet_time = self.packet_time.clone().mul(3).div(2);
                     if let Some(block_number) = self.consec_recv.as_ref() {
                         self.send_ack(*block_number)?;
                     }

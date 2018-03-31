@@ -35,6 +35,7 @@ impl Header {
         let mut buf = vec![0u8; BUFF_ALLOCATION_SIZE];
         match socket.peek_from(buf.as_mut()) {
             Ok((bytes_read, src_addr)) => {
+		println!("Receiving!");
                 if from.ip() != src_addr.ip() || from.port() != src_addr.port() {
                     Err(TFTPError::WrongHost)
                 } else {

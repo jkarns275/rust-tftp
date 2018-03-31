@@ -172,7 +172,7 @@ fn pmain(mut args: Vec<String>) {
     let mut drop_freq = 0;
     if argn > 3 || args.contains(&"-s".to_owned()) {
         let end = if argn > 3 { argn - 3 } else { argn };
-        for i in 0..end {
+        for i in 0..argn {
             match args[i].to_string().as_ref() {
                 "-s" => {
                     if argn <= i + 1 {

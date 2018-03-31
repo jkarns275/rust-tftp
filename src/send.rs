@@ -213,14 +213,14 @@ impl SendFile {
         if ack_header.block_number < self.window_range.0 { return Ok(Async::NotReady) }
         
         // If the whole window we sent last time was received, increase it!
-        if ack_header.block_number + 1 == self.window_range.1 {
+        /*if ack_header.block_number + 1 == self.window_range.1 {
             self.window_size <<= 1;
             if self.window_size == 0 { self.window_size == 1; }
             else if self.window_size > MAX_WINDOW_SIZE { self.window_size = MAX_WINDOW_SIZE; }
         } else { // otherwise make it smaller..
             self.window_size >>= 1;
             if self.window_size == 0 { self.window_size == 1; }
-        }
+        }*/
 
         for block_number in self.window_range.0..=(ack_header.block_number as usize) {
             self.blocks_pending_acks.remove(block_number);
@@ -313,7 +313,7 @@ impl Future for SendFile {
                     eprintln!("Encountered non-recoverable I/O error: {:?}", e);
                     Err(e)
                 },
-			}
+	    }
         }
     }
 }

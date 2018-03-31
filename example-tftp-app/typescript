@@ -1,0 +1,263 @@
+Script started on Sat 31 Mar 2018 12:20:15 PM EDT
+
+/usr/games/fortune: Command not found.
+[4mnuc4[24m:[1m~/Documents/rust-tftp/example-tftp-app[0m> ./bench2[K.sh 
+^C
+[4mnuc4[24m:[1m~/Documents/rust-tftp/example-tftp-app[0m> ./bench.sh
+
+real	0m7.297s
+user	0m0.000s
+sys	0m0.040s
+
+real	0m8.077s
+user	0m0.000s
+sys	0m0.044s
+
+real	0m7.827s
+user	0m0.004s
+sys	0m0.036s
+
+real	0m6.613s
+user	0m0.008s
+sys	0m0.032s
+
+real	0m6.944s
+user	0m0.012s
+sys	0m0.036s
+
+real	0m6.817s
+user	0m0.000s
+sys	0m0.040s
+
+real	0m7.508s
+user	0m0.000s
+sys	0m0.044s
+
+real	0m13.054s
+user	0m0.012s
+sys	0m0.032s
+
+real	0m12.530s
+user	0m0.012s
+sys	0m0.036s
+
+real	0m9.170s
+user	0m0.000s
+sys	0m0.044s
+
+real	0m7.838s
+user	0m0.028s
+sys	0m0.012s
+
+real	0m7.872s
+user	0m0.012s
+sys	0m0.032s
+
+real	0m7.431s
+user	0m0.008s
+sys	0m0.036s
+
+real	0m7.196s
+user	0m0.004s
+sys	0m0.040s
+
+real	0m7.043s
+user	0m0.008s
+sys	0m0.036s
+
+real	0m6.468s
+user	0m0.012s
+sys	0m0.028s
+real 1000.00s
+
+real	0m6.759s
+user	0m0.004s
+sys	0m0.044s
+
+real	0m6.243s
+user	0m0.008s
+sys	0m0.032s
+
+real	0m7.483s
+user	0m0.000s
+sys	0m0.048s
+
+real	0m5.368s
+user	0m0.008s
+sys	0m0.036s
+
+real	0m6.874s
+user	0m0.004s
+sys	0m0.044s
+
+real	0m6.559s
+user	0m0.012s
+sys	0m0.032s
+
+real	0m7.583s
+user	0m0.008s
+sys	0m0.036s
+
+real	0m7.059s
+user	0m0.000s
+sys	0m0.040s
+
+real	0m6.968s
+user	0m0.008s
+sys	0m0.036s
+
+real	0m25.441s
+user	0m0.004s
+sys	0m0.044s
+
+real	0m7.474s
+user	0m0.020s
+sys	0m0.024s
+
+real	0m10.959s
+user	0m0.016s
+sys	0m0.028s
+
+real	0m7.616s
+user	0m0.004s
+sys	0m0.040s
+
+real	0m7.240s
+user	0m0.004s
+sys	0m0.040s
+
+real	0m6.598s
+user	0m0.008s
+sys	0m0.036s
+
+real	0m8.017s
+user	0m0.012s
+sys	0m0.028s
+real 1000.00s
+thread 'main' panicked at 'Custom { kind: TimedOut, error: StringError("TFTP connection appears to be dead.") }', src/main.rs:141:25
+note: Run with `RUST_BACKTRACE=1` for a backtrace.
+
+real	0m12.919s
+user	0m0.004s
+sys	0m0.012s
+thread 'main' panicked at 'Custom { kind: TimedOut, error: StringError("TFTP connection appears to be dead.") }', src/main.rs:141:25
+note: Run with `RUST_BACKTRACE=1` for a backtrace.
+
+real	0m19.045s
+user	0m0.012s
+sys	0m0.040s
+thread 'main' panicked at 'Custom { kind: TimedOut, error: StringError("TFTP connection appears to be dead.") }', src/main.rs:141:25
+note: Run with `RUST_BACKTRACE=1` for a backtrace.
+
+real	0m29.646s
+user	0m0.004s
+sys	0m0.028s
+
+real	0m22.530s
+user	0m0.016s
+sys	0m0.028s
+thread 'main' panicked at 'Custom { kind: TimedOut, error: StringError("TFTP connection appears to be dead.") }', src/main.rs:141:25
+note: Run with `RUST_BACKTRACE=1` for a backtrace.
+
+real	0m12.230s
+user	0m0.000s
+sys	0m0.004s
+
+real	0m9.365s
+user	0m0.000s
+sys	0m0.044s
+thread 'main' panicked at 'Custom { kind: TimedOut, error: StringError("TFTP connection appears to be dead.") }', src/main.rs:141:25
+note: Run with `RUST_BACKTRACE=1` for a backtrace.
+
+real	0m12.227s
+user	0m0.004s
+sys	0m0.004s
+thread 'main' panicked at 'Custom { kind: TimedOut, error: StringError("TFTP connection appears to be dead.") }', src/main.rs:141:25
+note: Run with `RUST_BACKTRACE=1` for a backtrace.
+
+real	0m12.756s
+user	0m0.004s
+sys	0m0.016s
+thread 'main' panicked at 'Custom { kind: TimedOut, error: StringError("TFTP connection appears to be dead.") }', src/main.rs:141:25
+note: Run with `RUST_BACKTRACE=1` for a backtrace.
+
+real	0m15.110s
+user	0m0.008s
+sys	0m0.012s
+
+real	0m7.468s
+user	0m0.000s
+sys	0m0.044s
+
+real	0m10.505s
+user	0m0.004s
+sys	0m0.044s
+
+real	0m7.340s
+user	0m0.004s
+sys	0m0.036s
+thread 'main' panicked at 'Custom { kind: TimedOut, error: StringError("TFTP connection appears to be dead.") }', src/main.rs:141:25
+note: Run with `RUST_BACKTRACE=1` for a backtrace.
+
+real	0m17.184s
+user	0m0.000s
+sys	0m0.016s
+thread 'main' panicked at 'Custom { kind: TimedOut, error: StringError("TFTP connection appears to be dead.") }', src/main.rs:141:25
+note: Run with `RUST_BACKTRACE=1` for a backtrace.
+
+real	0m21.924s
+user	0m0.000s
+sys	0m0.032s
+thread 'main' panicked at 'Custom { kind: TimedOut, error: StringError("TFTP connection appears to be dead.") }', src/main.rs:141:25
+note: Run with `RUST_BACKTRACE=1` for a backtrace.
+
+real	0m20.561s
+user	0m0.004s
+sys	0m0.016s
+thread 'main' panicked at 'Custom { kind: TimedOut, error: StringError("TFTP connection appears to be dead.") }', src/main.rs:141:25
+note: Run with `RUST_BACKTRACE=1` for a backtrace.
+
+real	0m11.587s
+user	0m0.004s
+sys	0m0.020s
+[4mnuc4[24m:[1m~/Documents/rust-tftp/example-tftp-app[0m> vim src/main.rs 
+a              cache          Cargo.toml     il gatto.jpg   localhost.dat  src/           
+bench2.sh*     cached_files/  downloaded/    index.html     oo             target/        
+bench.sh*      Cargo.lock     grep           ipinfo         oof            typescript     
+[4mnuc4[24m:[1m~/Documents/rust-tftp/example-tftp-app[0m> vim src/main.rs 
+[K[4mnuc4[24m:[1m~/Documents/rust-tftp/example-tftp-app[0m> vim bench
+bench2.sh* bench.sh*  
+[4mnuc4[24m:[1m~/Documents/rust-tftp/example-tftp-app[0m> vim bench.sh 
+[?1049h[?1h=[2;1H▽[6n[2;1H  [1;1H]11;?[1;61r[?12;25h[?12l[?25h[27m[23m[m[H[2J[?25l[61;1H"bench.sh" 25L, 692C[>c[1;1H[34m#!/bin/bash[m
+[38;5;130mlet[m [36mi[m=[31m1[m
+[38;5;130mwhile [[m [35m$i[m [38;5;130m-le[m [31m16[m [38;5;130m]
+do[m
+time target/release/example-tftp-app [38;5;130m-d[m [31m0[m [38;5;130m-w[m [31m16[m [38;5;130m"[m[31m[::0]:4445[m[38;5;130m"[m [38;5;130m"[m[31m[fe80::5e2b:5b9c:918b:a72a]:4444[m[38;5;130m"[m [38;5;130m"[m[31mhttp://i0.kym-cdn.com/entries/iconss[6;1H/original/000/019/472/i09FJm4.jpg[m[38;5;130m"
+let[m i++
+[38;5;130mdone
+
+echo[m[31m [m[38;5;130m"[m[31mreal 1000.00s[m[38;5;130m"
+
+let[m [36mi[m=[31m1[m
+[38;5;130mwhile [[m [35m$i[m [38;5;130m-le[m [31m16[m [38;5;130m]
+do[m
+time target/release/example-tftp-app [38;5;130m-d[m [31m1[m [38;5;130m-w[m [31m16[m [38;5;130m"[m[31m[::0]:4445[m[38;5;130m"[m [38;5;130m"[m[31m[fe80::5e2b:5b9c:918b:a72a]:4444[m[38;5;130m"[m [38;5;130m"[m[31mhttp://i0.kym-cdn.com/entries/iconss[16;1H/original/000/019/472/i09FJm4.jpg[m[38;5;130m"
+let[m i++
+[38;5;130mdone
+
+echo[m[31m [m[38;5;130m"[m[31mreal 1000.00s[m[38;5;130m"
+
+let[m [36mi[m=[31m1[m
+[38;5;130mwhile [[m [35m$i[m [38;5;130m-le[m [31m16[m [38;5;130m]
+do[m
+time target/release/example-tftp-app [38;5;130m-d[m [31m13[m [38;5;130m-w[m [31m16[m [38;5;130m"[m[31m[::0]:4445[m[38;5;130m"[m [38;5;130m"[m[31m[fe80::5e2b:5b9c:918b:a72a]:4444[m[38;5;130m"[m [38;5;130m"[m[31mhttp://i0.kym-cdn.com/entries/iconn[26;1Hs/original/000/019/472/i09FJm4.jpg[m[38;5;130m"
+let[m i++
+[38;5;130mdone[m
+[94m~                                                                                                                                   [30;1H~                                                                                                                                   [31;1H~                                                                                                                                   [32;1H~                                                                                                                                   [33;1H~                                                                                                                                   [34;1H~                                                                                                                                   [35;1H~                                                                                                                                   [36;1H~                                                                                                                                   [37;1H~                                                                                                                                   [38;1H~                                                                                                                                   [39;1H~                                                                                                                                   [40;1H~                                                                                                                                   [41;1H~                                                                                                                                   [42;1H~                                                                                                                                   [43;1H~                                                                                                                                   [44;1H~                                                                                                                                   [45;1H~                                                                                                                                   [46;1H~                                                                                                                                   [47;1H~                                                                                                                                   [48;1H~                                                                                                                                   [49;1H~                                                                                                                                   [50;1H~                                                                                                                                   [51;1H~                                                                                                                                   [52;1H~                                                                                                                                   [53;1H~                                                                                                                                   [54;1H~                                                                                                                                   [55;1H~                                                                                                                                   [56;1H~                                                                                                                                   [57;1H~                                                                                                                                   [58;1H~                                                                                                                                   [59;1H~                                                                                                                                   [60;1H~                                                                                                                                   [m[61;115H1,1[11CAll[1;1H[?12l[?25h[?25l[61;1H[1m-- INSERT --[m[61;13H[K[61;115H1,1[11CAll[1;1H[?12l[?25h[?25l[61;115H2[2;1H[?12l[?25h[?25l[61;115H3[3;1H[?12l[?25h[?25l[61;115H4[4;1H[?12l[?25h[?25l[61;115H5[5;1H[?12l[?25h[?25l[61;115H6[7;1H[?12l[?25h[?25l[61;115H7[8;1H[?12l[?25h[?25l[61;115H8[9;1H[?12l[?25h[?25l[61;115H9[10;1H[?12l[?25h[?25l[61;115H10,1[11;1H[?12l[?25h[?25l[61;116H1[12;1H[?12l[?25h[?25l[61;116H2[13;1H[?12l[?25h[?25l[61;116H3[14;1H[?12l[?25h[?25l[61;116H4[15;1H[?12l[?25h[?25l[61;116H5[17;1H[?12l[?25h[?25l[61;116H6[18;1H[?12l[?25h[?25l[61;116H7[19;1H[?12l[?25h[?25l[61;116H8[20;1H[?12l[?25h[?25l[61;116H9[21;1H[?12l[?25h[?25l[61;115H20[22;1H[?12l[?25h[?25l[61;116H1[23;1H[?12l[?25h[?25l[61;116H2[24;1H[?12l[?25h[?25l[61;116H1[23;1H[?12l[?25h[?25l[61;116H0[22;1H[?12l[?25h[?25lvlet [36mi[m=[31m1[m[61;118H2[22;2H[?12l[?25h[?25l[61;116H1[23;2H[?12l[?25h[?25l[61;116H2[24;2H[?12l[?25h[?25l[61;116H1[23;2H[?12l[?25h[?25l[61;116H0[22;2H[?12l[?25h[?25l[38;5;130mlet[m [36mi[m=[31m1[m[22;8H[K[61;118H1[22;1H[?12l[?25h[61;1H[K[22;1H[?25l[61;115H20,1[10CAll[22;1H[?12l[?25h[?25l[61;1H[1m-- VISUAL --[m[61;115H[K[61;115H20,1[10CAll[22;1H[?12l[?25h[?25l[38;5;130m[47mlet[m[47m [m[36m[47mi[m[47m=[m[31m[47m1[m[47m [m[61;116H1[23;1H[?12l[?25h[?25l[38;5;130m[47mwhile [[m[47m [m[35m[47m$i[m[47m [m[38;5;130m[47m-le[m[47m [m[31m[47m16[m[47m [m[38;5;130m[47m][m[47m [m[61;116H2[24;1H[?12l[?25h[?25l[38;5;130m[47mdo[m[47m [m[61;116H3[25;1H[?12l[?25h[?25l[47mt[m[130C[31mnn[26;1Hs[m[61;118H2[25;2H[?12l[?25h[?25l[47mime target/release/example-tftp-app [m[38;5;130m[47m-d[m[47m [m[31m[47m13[m[47m [m[38;5;130m[47m-w[m[47m [m[31m[47m16[m[47m [m[38;5;130m[47m"[m[31m[47m[::0]:4445[m[38;5;130m[47m"[m[47m [m[38;5;130m[47m"[m[31m[47m[fe80::5e2b:5b9c:918b:a72a]:4444[m[38;5;130m[47m"[m[47m [m[38;5;130m[47m"[m[31m[47mhttp://i0.kym-cdn.com/entries/iconn[26;1Hs/original/000/019/472/i09FJm4.jpg[m[38;5;130m[47m"[m[47m [m
+[38;5;130m[47ml[m[61;116H4[27;2H[?12l[?25h[?25l[38;5;130m[47met[m[47m i++ [m
+[38;5;130m[47md[m[61;116H5[28;2H[?12l[?25h[?25l[38;5;130m[47mo[m[61;118H3[28;3H[?12l[?25h[?25l[38;5;130m[47mn[m[61;118H4[28;4H[?12l[?25h[?25l[38;5;130m[47me[m[61;118H5[28;5H[?12l[?25h[?25l[?12l[?25h[?25l[?12l[?25h[?25l[?12l[?25h[?25l[?12l[?25h[?25l[?12l[?25h[?25l[?12l[?25h[?25l[?12l[?25h[?25l[?12l[?25h[?25l[?12l[?25h[?25l[?12l[?25h[?25l[?12l[?25h[?25l[?12l[?25h[?25l[?12l[?25h[?25l[61;1H5 fewer lines[61;115H[K[22;1H[K[23;1H[94m~                                                                                                                                   [24;1H~                                                                                                                                   [25;1H~                                                                                                                                   [26;1H~                                                                                                                                   [27;1H~                                                                                                                                   [28;1H~                                                                                                                                   [m[61;115H20,0-1[8CAll[61;115H[K[61;115H20,0-1[8CAll[22;1H[?12l[?25h[?25l[61;1H[K[61;1H:[?12l[?25hw[?25l[?12l[?25h[?25l"bench.sh" 20L, 481C written[86C20,0-1[8CAll[61;115H[K[61;115H20,0-1[8CAll[22;1H[?12l[?25h[?25l[61;1H[K[61;1H:[?12l[?25hq[?25l[?12l[?25h[?25l[61;1H[K[61;1H[?1l>[?12l[?25h[?1049l[4mnuc4[24m:[1m~/Documents/rust-tftp/example-tftp-app[0m> :w
+:w: Command not found.
+[4mnuc4[24m:[1m~/Documents/rust-tftp/example-tftp-app[0m> exit
+exit
+
+Script done on Sat 31 Mar 2018 01:06:01 PM EDT
