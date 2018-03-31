@@ -286,7 +286,7 @@ impl Future for ReceiveFile {
 
             Err(e) => {
                 if e.kind() == io::ErrorKind::TimedOut || e.kind() == io::ErrorKind::WouldBlock {
-		    self.packet_time = self.packet_time.clone().mul(3).div(2);
+                    self.update_average();
                     if let Some(block_number) = self.consec_recv.as_ref() {
                         self.send_ack(*block_number)?;
                     }
