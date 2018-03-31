@@ -269,7 +269,7 @@ fn pmain(mut args: Vec<String>) {
     let url = args[2].clone();
 
     unsafe { tftp::header::DROP_THRESHOLD = drop_freq as u64; };
-    
+    unsafe { tftp::header::STOP_AND_WAIT = window_size == 1; };    
     request(local_addr, server_addr, url, window_size);
 }
 /*

@@ -18,6 +18,7 @@ use types::*;
 use header::*;
 use client::*;
 
+
 pub struct ReceiveFile {
     /// The file that backs file_map.
     file: File,
@@ -79,8 +80,12 @@ impl ReceiveFile {
     fn update_average(&mut self) {
         let elapsed = self.last_time.elapsed();
         self.last_time = Instant::now();
-        self.packet_time = elapsed.mul(15);
+        let old_pt = self.packet_time.clone();
+	self.packet_time = elapsed.mul(15);
         self.packet_time = elapsed.div(16) + self.packet_time.mul(15).div(16);
+    	if self.packet_time > Duration::new(0, 250000000) {
+	    self.packet_time = Duration::new(0, 250000000);
+	}
     }
 
     fn init(mut self) -> Result<Self, io::Error> {
@@ -100,7 +105,8 @@ impl ReceiveFile {
     }
 
     pub fn handle_data(&mut self, data: DataHeader) -> Result<Option<()>, io::Error> {
-        self.last_time = Instant::now();
+	if unsafe { STOP_AND_WAIT } { self.send_ack(data.block_number)?; }
+	self.last_time = Instant::now();
         if let Some(highest_block) = self.highest_block.take() {
             self.highest_block = Some(data.block_number);
             let new_len = (MAX_DATA_LEN * (data.block_number as usize) + data.data_len) as u64;
@@ -153,7 +159,8 @@ impl ReceiveFile {
     ///
     /// Err(<io::Error>): If there was an I/O error at any point.
     fn send_ack(&mut self, block_number: usize) -> Result<Option<()>, io::Error> {
-        if let Ok(ref mut socket) = self.socket.try_lock() {
+        println!("Sending");
+	if let Ok(ref mut socket) = self.socket.try_lock() {
             Header::Ack(AckHeader::new(block_number))
                 .send(self.host_addr.clone(), socket)?;
             Ok(Some(()))
@@ -162,14 +169,20 @@ impl ReceiveFile {
         }
     }
 
-    fn receive_header(&mut self) -> Result<Option<Header>, io::Error> {
+    fn receive_header(&mut self) -> Result<Option<Vec<Header>>, io::Error> {
+	println!("OOF");
         if let Ok(ref mut socket) = self.socket.clone().try_lock() {
-            socket.set_read_timeout(Some(Duration::new(1, 0)))?;
-	    socket.set_read_timeout(Some(self.packet_time.clone().mul(3).div(2)))?;
+	    socket.set_read_timeout(Some(Duration::new(0, 25000000)))?;
             match Header::recv(self.host_addr.clone(), socket) {
                 Ok(r)   => { 
-                    self.update_average();
-                    Ok(Some(r))
+		    self.update_average();
+		    let mut headers = vec![r];
+	            socket.set_read_timeout(Some(Duration::new(0, 25000000)))?;
+		    while let Ok(header) = Header::recv(self.host_addr.clone(), socket) {
+			println!("Got data.");    
+			headers.push(header);
+		    }
+                    Ok(Some(headers))
                 },
                 Err(e)  => {
                     if let TFTPError::IOError(ioerr) = e {
@@ -216,7 +229,7 @@ impl Future for ReceiveFile {
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         use header::Header::*;
-
+	println!("Sad");
         if self.consec_recv.is_none() {
             if self.received.contains(0) {
                 self.consec_recv = Some(0);
@@ -258,38 +271,43 @@ impl Future for ReceiveFile {
         
         let prev_error_count = self.error_count;
         self.error_count = 0;
-        
         match self.receive_header() {
-            Ok(Some(Data(data_header))) => {
+            Ok(Some(headers)) => {
                 // If writing to the file fails, try several times. If it continues to fail, give
                 // up.
-                match self.handle_data(data_header.clone()) {
-                    Err(e) => {
-                        return self.fail(e)
-                    },
-                    // The lock could not be acquired. This probably shouldn't be happening ever.
-                    Ok(None) => {
-                        return self.fail(io::Error::new(io::ErrorKind::WouldBlock, "Could not obtain UdpSocket mutex."))
-                    },
-                    // We did it!
-                    Ok(Some(())) => {
-                        return Ok(Async::NotReady)
-                    }
-                }
+		for header in headers.into_iter() {
+	            if let Header::Data(data_header) = header {
+                        match self.handle_data(data_header.clone()) {
+                    	    Err(e) => {
+                        	return self.fail(e)
+                    	    },
+                    	    // The lock could not be acquired. This probably shouldn't be happening ever.
+                    	    Ok(None) => {
+                        	return self.fail(io::Error::new(io::ErrorKind::WouldBlock, "Could not obtain UdpSocket mutex."))
+                     	    },
+                            // We did it!
+                    	    Ok(Some(())) => {}
+                        }
+		    } else if let Header::Error(error_header) = header {
+		 	return Err(io::Error::new(io::ErrorKind::Other,
+                                          format!("Received error from server: '{}'", error_header.error_message)))
+ 		    }
+		}
+		return Ok(Async::NotReady)
             },
 
-            Ok(Some(Error(error_header))) =>
-                return Err(io::Error::new(io::ErrorKind::Other,
-                                          format!("Received error from server: '{}'", error_header.error_message))),
-
-            Ok(Some(_)) | Ok(None) => return Ok(Async::NotReady),
+	   Ok(None) => { return Ok(Async::NotReady) },
 
             Err(e) => {
                 if e.kind() == io::ErrorKind::TimedOut || e.kind() == io::ErrorKind::WouldBlock {
-                    self.update_average();
-                    if let Some(block_number) = self.consec_recv.as_ref() {
-                        self.send_ack(*block_number)?;
-                    }
+                    if let Some(&block_number) = self.consec_recv.as_ref() {
+			self.send_ack(block_number)?;
+		    } else {
+		   	if self.last_time.elapsed() > Duration::new(1, 0) {
+			    self.last_time = Instant::now();
+			    return Ok(Async::NotReady);
+			}	
+		    }
                 }
 
                 self.error_count = prev_error_count + 1;
