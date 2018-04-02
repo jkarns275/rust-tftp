@@ -83,9 +83,9 @@ impl ReceiveFile {
         let old_pt = self.packet_time.clone();
 	self.packet_time = elapsed.mul(15);
         self.packet_time = elapsed.div(16) + self.packet_time.mul(15).div(16);
-    	if self.packet_time > Duration::new(0, 250000000) {
+    	/*if self.packet_time > Duration::new(0, 250000000) {
 	    self.packet_time = Duration::new(0, 250000000);
-	}
+	}*/
     }
 
     fn init(mut self) -> Result<Self, io::Error> {
@@ -159,7 +159,6 @@ impl ReceiveFile {
     ///
     /// Err(<io::Error>): If there was an I/O error at any point.
     fn send_ack(&mut self, block_number: usize) -> Result<Option<()>, io::Error> {
-        println!("Sending");
 	if let Ok(ref mut socket) = self.socket.try_lock() {
             Header::Ack(AckHeader::new(block_number))
                 .send(self.host_addr.clone(), socket)?;
@@ -170,16 +169,14 @@ impl ReceiveFile {
     }
 
     fn receive_header(&mut self) -> Result<Option<Vec<Header>>, io::Error> {
-	println!("OOF");
         if let Ok(ref mut socket) = self.socket.clone().try_lock() {
-	    socket.set_read_timeout(Some(Duration::new(0, 25000000)))?;
+	    socket.set_read_timeout(Some(self.packet_time.clone()))?;
             match Header::recv(self.host_addr.clone(), socket) {
                 Ok(r)   => { 
 		    self.update_average();
 		    let mut headers = vec![r];
-	            socket.set_read_timeout(Some(Duration::new(0, 25000000)))?;
+	            socket.set_read_timeout(Some(Duration::new(0, 250000)))?;
 		    while let Ok(header) = Header::recv(self.host_addr.clone(), socket) {
-			println!("Got data.");    
 			headers.push(header);
 		    }
                     Ok(Some(headers))
@@ -229,26 +226,29 @@ impl Future for ReceiveFile {
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         use header::Header::*;
-	println!("Sad");
-        if self.consec_recv.is_none() {
-            if self.received.contains(0) {
-                self.consec_recv = Some(0);
-            }
-        }
 
-        if self.consec_recv.is_some() {
-            let mut consec_recv = self.consec_recv.unwrap();
-            let original = consec_recv;
-            loop {
-                if self.received.contains(consec_recv + 1) {
-                    consec_recv += 1;
-                    continue;
-                } else {
-                    break;
-                }
-            }
-            self.consec_recv = Some(consec_recv);
+	if self.consec_recv.is_none() {
+        	if self.received.contains(0) {
+                	self.consec_recv = Some(0);
+            	}
+       	}
+	if self.consec_recv.is_some() {
+        	    let mut consec_recv = self.consec_recv.clone().unwrap();
+            	    let original = consec_recv;
+            	    loop {
+                        if self.received.contains(consec_recv + 1) {
+                            consec_recv += 1;
+                            continue;
+                        } else {
+                            break;
+                        }
+                    }
+                    self.consec_recv = Some(consec_recv);
+	            if original <= consec_recv {
+	    	        let _ = self.send_ack(consec_recv);
+	            }
         }
+	
 
         if self.received_last_block {
             let mut contains_all = true;
@@ -266,7 +266,7 @@ impl Future for ReceiveFile {
         }
 
         if self.last_time.elapsed() > TOTAL_TIMEOUT() {
-            return self.fail(io::Error::new(io::ErrorKind::TimedOut, "TFTP connection appears to be dead."))
+            return self.fail(io::Error::new(io::ErrorKind::TimedOut, "TFTP connection appears to be dead."));
         }
         
         let prev_error_count = self.error_count;
@@ -275,7 +275,7 @@ impl Future for ReceiveFile {
             Ok(Some(headers)) => {
                 // If writing to the file fails, try several times. If it continues to fail, give
                 // up.
-		for header in headers.into_iter() {
+		for header in headers.into_iter().rev() {
 	            if let Header::Data(data_header) = header {
                         match self.handle_data(data_header.clone()) {
                     	    Err(e) => {
@@ -293,6 +293,27 @@ impl Future for ReceiveFile {
                                           format!("Received error from server: '{}'", error_header.error_message)))
  		    }
 		}
+	        if self.consec_recv.is_none() {
+        	    if self.received.contains(0) {
+                	self.consec_recv = Some(0);
+            	    }
+        	}
+	        if self.consec_recv.is_some() {
+        	    let mut consec_recv = self.consec_recv.clone().unwrap();
+            	    let original = consec_recv;
+            	    loop {
+                        if self.received.contains(consec_recv + 1) {
+                            consec_recv += 1;
+                            continue;
+                        } else {
+                            break;
+                        }
+                    }
+                    self.consec_recv = Some(consec_recv);
+	            if original <= consec_recv {
+	    	        let _ = self.send_ack(consec_recv);
+	            }
+                }
 		return Ok(Async::NotReady)
             },
 
@@ -300,14 +321,15 @@ impl Future for ReceiveFile {
 
             Err(e) => {
                 if e.kind() == io::ErrorKind::TimedOut || e.kind() == io::ErrorKind::WouldBlock {
-                    if let Some(&block_number) = self.consec_recv.as_ref() {
+                    
+		   if self.last_time.elapsed() > Duration::new(1, 0) {
+		    	self.last_time = Instant::now();
+			if let Some(&block_number) = self.consec_recv.as_ref() {
 			self.send_ack(block_number)?;
 		    } else {
-		   	if self.last_time.elapsed() > Duration::new(1, 0) {
-			    self.last_time = Instant::now();
-			    return Ok(Async::NotReady);
-			}	
-		    }
+			    self.error_count += 1;
+		    }}
+		    return Ok(Async::NotReady);
                 }
 
                 self.error_count = prev_error_count + 1;

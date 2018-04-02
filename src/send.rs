@@ -89,12 +89,13 @@ pub struct SendFile {
 
 impl SendFile {
     pub fn new(socket: Arc<Mutex<UdpSocket>>, host_addr: SocketAddr, file: File, window_size: usize) -> Result<Self, io::Error> {
+	if window_size <= 1 { unsafe { STOP_AND_WAIT = true } }
         let file_map = unsafe { MmapOptions::new().map(&file)? };
         let file_len: usize = file_map.len();
         if file_len > (1 << 24) * MAX_DATA_LEN { return Err(io::Error::new(io::ErrorKind::Other, "Files greater than 8GB in size cannot be sent.")) }
         // The number of whole blocks, plus another block if there is extra
         let num_blocks: usize = file_len / MAX_DATA_LEN + (if file_len & (MAX_DATA_LEN - 1) == 0 { 0 } else { 1 });
-
+	let window_size = if window_size <= 1 { 1 } else { 2 };
         let mut r = SendFile {
             file,
             file_map,
@@ -102,7 +103,7 @@ impl SendFile {
             socket,
             host_addr,
             num_blocks,
-            window_size,
+            window_size: window_size,
             err_counter: 0,
             window_range: (0, window_size),
             blocks_pending_acks: BitSet::from_bit_vec(BitVec::from_elem(num_blocks, true)),
@@ -115,12 +116,13 @@ impl SendFile {
 
     // TODO: Fix this when done
     pub fn new_server(socket: Arc<Mutex<UdpSocket>>, host_addr: SocketAddr, file: File, window_size: usize) -> Result<Self, io::Error> {
+	if window_size <= 1 { unsafe { STOP_AND_WAIT = true } }
         let file_map = unsafe { MmapOptions::new().map(&file)? };
         let file_len: usize = file_map.len();
         if file_len > (1 << 24) * MAX_DATA_LEN { return Err(io::Error::new(io::ErrorKind::Other, "Files greater than 8GB in size cannot be sent.")) }
         // The number of whole blocks, plus another block if there is extra
         let num_blocks: usize = file_len / MAX_DATA_LEN + (if file_len & (MAX_DATA_LEN - 1) == 0 { 0 } else { 1 });
-    
+	let window_size = if window_size <= 1 { 1 } else { 2 };
         let mut r = SendFile {
             file,
             file_map,
@@ -128,7 +130,7 @@ impl SendFile {
             socket,
             host_addr,
             num_blocks,
-            window_size,
+            window_size: window_size,
             err_counter: 0,
             window_range: (0, window_size),
             blocks_pending_acks: BitSet::from_bit_vec(BitVec::from_elem(num_blocks, true)),
@@ -210,18 +212,25 @@ impl SendFile {
     }
 
     fn handle_ack(&mut self, ack_header: AckHeader) -> Poll<(), io::Error> {
-        if ack_header.block_number < self.window_range.0 { return Ok(Async::NotReady) }
+        if ack_header.block_number < self.window_range.0 {
+		for i in ack_header.block_number + 1..self.window_range.0 {
+			self.blocks_pending_acks.insert(i);
+		}
+		self.window_range.0 = ack_header.block_number + 1;
+		self.window_range.1 = self.window_range.0 + self.window_size;
+	} else {
         
         // If the whole window we sent last time was received, increase it!
         if !unsafe { STOP_AND_WAIT } { 
 	if ack_header.block_number + 1 == self.window_range.1 {
-            self.window_size <<= 1;
+    	    self.window_size <<= 1;
             if self.window_size == 0 { self.window_size == 1; }
             else if self.window_size > MAX_WINDOW_SIZE { self.window_size = MAX_WINDOW_SIZE; }
         } else { // otherwise make it smaller..
             self.window_size >>= 1;
             if self.window_size == 0 { self.window_size == 1; }
         }}
+	}
 
         for block_number in self.window_range.0..=(ack_header.block_number as usize) {
             self.blocks_pending_acks.remove(block_number);
@@ -243,8 +252,8 @@ impl SendFile {
     }
 
     fn send_window(&mut self) -> Result<(), io::Error> {
-        for block_number in self.window_range.0..self.window_range.1 {
-            if let Some(block) = self.get_block_n(block_number) {
+	for block_number in self.window_range.0..self.window_range.1 {
+	    if let Some(block) = self.get_block_n(block_number) {
                 self.send_data(block)?;
             }
         }
@@ -257,7 +266,7 @@ impl SendFile {
 
     fn receive_header(&mut self) -> Result<Option<Header>, io::Error> {
         if let Ok(ref mut socket) = self.socket.clone().try_lock() {
-            socket.set_read_timeout(Some(self.average_rtt.clone().mul(2)))?;  
+            socket.set_read_timeout(None)?;  
     	    match Header::recv(self.host_addr.clone(), socket) {
                 Ok(r)   => { self.err_counter = 0; Ok(Some(r)) },
                 Err(e)  => {
@@ -298,7 +307,7 @@ impl Future for SendFile {
     type Error = io::Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        if self.window_range.0 == self.num_blocks {
+        if self.window_range.0 == self.num_blocks && self.blocks_pending_acks.is_empty() {
             return Ok(Async::Ready(()));
         } else {
             match self.receive_header() {
@@ -311,8 +320,13 @@ impl Future for SendFile {
                 Ok(Some(_)) | Ok(None) => Ok(Async::NotReady),
 
                 Err(e) => {
-                    eprintln!("Encountered non-recoverable I/O error: {:?}", e);
-                    Err(e)
+                    match e.kind() {
+		    	io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut => { Ok(Async::NotReady) },
+			_ => {
+			    eprintln!("Encountered non-recoverable I/O error: {:?}", e);
+                	    Err(e)
+		    	}
+		    }
                 },
 	    }
         }

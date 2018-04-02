@@ -120,6 +120,7 @@ fn server(addr: SocketAddr, window_size: usize) {
                 read_header.filename = get(&url, &mut core);
                 cache = add_and_save(cache, url, read_header.filename.clone()).unwrap();
                 server.clone().handle_read_request(read_header);
+		println!("Done");
             },
             _ => {
             }, // Ignore everything else
